@@ -23,6 +23,8 @@ from app.gemini_gold_trader.guardrails import (
     trades_today,
 )
 from app.gemini_gold_trader.learning import call_stats_today, get_setup_stats
+from app.gemini_gold_trader.timing_stats import hour_performance_stats
+from app.gemini_gold_trader.trade_hours import trade_schedule_summary
 from app.gemini_gold_trader.models import GeminiGoldDecision, GeminiGoldOutcome, GeminiGoldReview
 
 logger = logging.getLogger(__name__)
@@ -50,6 +52,10 @@ APPLYABLE_CONFIG_FIELDS = frozenset(
         "orb_max_calls_day",
         "orb_max_trades_per_session",
         "max_live_trades_day",
+        "trade_sessions",
+        "custom_trade_hours_enabled",
+        "trade_hours_start_utc",
+        "trade_hours_end_utc",
     }
 )
 
@@ -188,8 +194,12 @@ def suggestions_to_changes(suggestions: List[Dict[str, Any]]) -> Dict[str, Any]:
                 changes[field] = float(raw)
             except (TypeError, ValueError):
                 continue
-        elif field in ("use_limit_entry", "orb_enabled"):
+        elif field in ("use_limit_entry", "orb_enabled", "custom_trade_hours_enabled"):
             changes[field] = str(raw).strip().lower() in ("1", "true", "yes", "on")
+        elif field == "trade_sessions":
+            from app.gemini_gold_trader.trade_hours import normalize_trade_sessions
+
+            changes[field] = list(normalize_trade_sessions(raw))
         else:
             changes[field] = raw
     return changes
@@ -470,6 +480,25 @@ def _timing_analysis_block(db, *, days: int) -> List[str]:
             f"Gap between executed trades: median {med_gap:.0f}m, "
             f"min {gaps_min[0]:.0f}m, max {gaps_min[-1]:.0f}m"
         )
+
+    perf = hour_performance_stats(db, days=days, min_trades=2)
+    if perf.get("best_hours"):
+        lines.append("Best UTC hours (min 2 closed trades):")
+        for b in perf["best_hours"]:
+            lines.append(
+                f"  {int(b['hour_utc']):02d}:00 UTC — {b['trades']} trades, WR {b['win_rate_pct']}%"
+            )
+    if perf.get("worst_hours"):
+        lines.append("Weakest UTC hours (min 2 closed trades):")
+        for b in perf["worst_hours"]:
+            lines.append(
+                f"  {int(b['hour_utc']):02d}:00 UTC — {b['trades']} trades, WR {b['win_rate_pct']}%"
+            )
+    if not perf.get("total_closed_trades"):
+        lines.append("Take volume by UTC hour (no closed trades yet):")
+        for b in perf.get("by_hour") or []:
+            if int(b.get("take_count") or 0) > 0:
+                lines.append(f"  {int(b['hour_utc']):02d}:00 UTC — {b['take_count']} takes")
     return lines
 
 
@@ -701,6 +730,7 @@ def build_review_prompt(
         f"orb_enabled={cfg.orb_enabled}",
         f"orb_confidence_threshold={cfg.orb_confidence_threshold}",
         f"min_trade_gap_min={cfg.min_trade_gap_min}",
+        f"trade_schedule={trade_schedule_summary(cfg)}",
         f"dry_run={cfg.dry_run}",
         f"execution_mode={cfg.execution_mode}",
         "",
@@ -762,6 +792,8 @@ def build_review_prompt(
     lines.append(
         "Produce a structured review. You MUST analyze timing (hours/sessions/hold times) "
         "and aggressiveness (frequency vs caps, confidence, min_trade_gap). "
+        "Recommend optimal UTC trading windows in timing_insights — cite best_hours WR data. "
+        "Suggest trade_sessions / custom_trade_hours_* config changes when data supports it. "
         "ctrader_account_notes must summarize the cTrader broker account section "
         "(balance/equity, open positions, reconciliation, recent closes). "
         "config_suggestions.field must be one of: "

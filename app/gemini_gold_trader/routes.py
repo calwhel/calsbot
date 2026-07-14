@@ -42,6 +42,8 @@ from app.gemini_gold_trader.guardrails import (
 from app.gemini_gold_trader.funnel import snapshot as funnel_snapshot
 from app.gemini_gold_trader.funnel_persist import recent_funnel_events
 from app.gemini_gold_trader.learning import call_stats_today, get_setup_stats
+from app.gemini_gold_trader.timing_stats import hour_performance_stats
+from app.gemini_gold_trader.trade_hours import trade_session_catalog
 from app.gemini_gold_trader.models import GeminiGoldDecision
 from app.gemini_gold_trader.reconcile import (
     list_open_executions,
@@ -238,6 +240,10 @@ def _config_payload(cfg, cfg_row, env) -> Dict[str, Any]:
         "orb_confidence_threshold": cfg.orb_confidence_threshold,
         "orb_max_calls_day": cfg.orb_max_calls_day,
         "orb_max_trades_per_session": cfg.orb_max_trades_per_session,
+        "trade_sessions": list(cfg.trade_sessions),
+        "custom_trade_hours_enabled": cfg.custom_trade_hours_enabled,
+        "trade_hours_start_utc": cfg.trade_hours_start_utc,
+        "trade_hours_end_utc": cfg.trade_hours_end_utc,
         "env_enabled": gemini_gold_enabled(),
         "calls_reset_at": (
             cfg_row.calls_reset_at.isoformat()
@@ -437,6 +443,8 @@ async def api_status(uid: str = Query(...)):
             "demo_label": f"[Gemini Gold] {mode_label}",
             "runtime": runtime_state.get_status(),
             "shared_session_hours": gold_ai_session_hours(),
+            "trade_session_catalog": trade_session_catalog(),
+            "hour_performance": hour_performance_stats(db, days=14),
             "config": _config_payload(cfg, row, env),
             "demo_accounts": demo_accounts,
             "live_accounts": live_accounts,
@@ -578,9 +586,18 @@ async def api_update_config(request: Request, uid: str = Query(...)):
             "orb_confidence_threshold",
             "orb_max_calls_day",
             "orb_max_trades_per_session",
+            "trade_sessions",
+            "custom_trade_hours_enabled",
+            "trade_hours_start_utc",
+            "trade_hours_end_utc",
         ):
             if field in body:
                 setattr(row, field, body[field])
+
+        if "trade_sessions" in body:
+            from app.gemini_gold_trader.trade_hours import normalize_trade_sessions
+
+            row.trade_sessions = list(normalize_trade_sessions(body.get("trade_sessions")))
 
         if enabling_mirror:
             row.live_mirror_confirmed_at = datetime.utcnow()
@@ -668,6 +685,8 @@ async def api_calibration(uid: str = Query(...), days: int = Query(14)):
             "ok": True,
             "funnel": funnel_snapshot(),
             "setup_stats": get_setup_stats(db, days=days),
+            "hour_performance": hour_performance_stats(db, days=days),
+            "trade_session_catalog": trade_session_catalog(),
             "call_stats_today": call_stats_today(db),
             "recent_funnel_events": _safe_funnel_events(db, limit=60),
             "review_model": gemini_gold_review_model(),
@@ -793,9 +812,18 @@ def _apply_config_changes_to_row(row, body: Dict[str, Any], *, trader_uid: int, 
         "orb_confidence_threshold",
         "orb_max_calls_day",
         "orb_max_trades_per_session",
+        "trade_sessions",
+        "custom_trade_hours_enabled",
+        "trade_hours_start_utc",
+        "trade_hours_end_utc",
     ):
         if field in body:
             setattr(row, field, body[field])
+
+    if "trade_sessions" in body:
+        from app.gemini_gold_trader.trade_hours import normalize_trade_sessions
+
+        row.trade_sessions = list(normalize_trade_sessions(body.get("trade_sessions")))
 
 
 @router.post("/api/gemini-gold-trader/apply-review")

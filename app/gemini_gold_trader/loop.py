@@ -51,6 +51,7 @@ from app.gemini_gold_trader.telegram_notify import (
     notify_live_mirror_filled,
 )
 from app.gemini_gold_trader.pending_entry import pending_status_label, sync_pending_entries
+from app.gemini_gold_trader.trade_hours import resolve_trading_session
 from app.gemini_gold_trader.validator import validate_take_decision
 from app.gold_ai_trader.call_gates import atr_from_klines
 
@@ -97,16 +98,21 @@ def _update_live_mirror_row(
     db.commit()
 
 
-def active_session(now: datetime) -> Optional[str]:
-    from app.services.forex_sessions import is_named_session_active
+def active_session(now: datetime, cfg=None) -> Optional[str]:
+    from app.gemini_gold_trader.trade_hours import resolve_trading_session
 
-    if is_named_session_active("asia", now):
-        return "asia"
-    if is_named_session_active("new_york", now):
-        return "new_york"
-    if is_named_session_active("london", now):
-        return "london"
-    return None
+    if cfg is None:
+        from app.services.forex_sessions import is_named_session_active
+
+        if is_named_session_active("asia", now):
+            return "asia"
+        if is_named_session_active("new_york", now):
+            return "new_york"
+        if is_named_session_active("london", now):
+            return "london"
+        return None
+    session, _ = resolve_trading_session(now, cfg)
+    return session
 
 
 def _load_merged_config(db, env):
@@ -199,7 +205,7 @@ async def run_gemini_gold_trader_loop() -> None:
     env = env_defaults()
     cfg = await run_with_db(_load_merged_config, env)
 
-    session = active_session(now)
+    session, dormant_reason = resolve_trading_session(now, cfg)
     runtime_state.note_scan(session)
 
     if not cfg.enabled:
@@ -209,7 +215,7 @@ async def run_gemini_gold_trader_loop() -> None:
         runtime_state.note_dormant("kill_switch")
         return
     if not session:
-        runtime_state.note_dormant("outside_session")
+        runtime_state.note_dormant(dormant_reason)
         return
 
     def _funnel_db(db, *args, **kwargs):
@@ -1040,7 +1046,7 @@ def _watchdog_snapshot() -> tuple[bool, bool, str | None, float | None]:
     cfg = with_db_session(_load_merged_config)(env)
     if not cfg.enabled:
         return False, bool(cfg.kill_switch), None, None
-    session = active_session(datetime.utcnow())
+    session = active_session(datetime.utcnow(), cfg)
     age_s = scan_heartbeat_age_seconds()
     return True, bool(cfg.kill_switch), session, age_s
 

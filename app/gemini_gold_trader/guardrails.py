@@ -15,6 +15,7 @@ from app.gemini_gold_trader.config import (
     env_defaults,
 )
 from app.gemini_gold_trader.models import GeminiGoldConfig, GeminiGoldDecision
+from app.gemini_gold_trader.trade_hours import normalize_trade_sessions
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,20 @@ def merge_config(db_row: GeminiGoldConfig, env: GeminiGoldRuntimeConfig) -> Gemi
         orb_max_calls_day=int(getattr(db_row, "orb_max_calls_day", None) or env.orb_max_calls_day or 20),
         orb_max_trades_per_session=int(
             getattr(db_row, "orb_max_trades_per_session", None) or env.orb_max_trades_per_session or 1
+        ),
+        trade_sessions=normalize_trade_sessions(
+            getattr(db_row, "trade_sessions", None) or env.trade_sessions
+        ),
+        custom_trade_hours_enabled=bool(
+            getattr(db_row, "custom_trade_hours_enabled", None)
+            if getattr(db_row, "custom_trade_hours_enabled", None) is not None
+            else env.custom_trade_hours_enabled
+        ),
+        trade_hours_start_utc=str(
+            getattr(db_row, "trade_hours_start_utc", None) or env.trade_hours_start_utc or "12:00"
+        ),
+        trade_hours_end_utc=str(
+            getattr(db_row, "trade_hours_end_utc", None) or env.trade_hours_end_utc or "21:00"
         ),
         chart_bars=env.chart_bars,
         chart_bars_1m=env.chart_bars_1m,

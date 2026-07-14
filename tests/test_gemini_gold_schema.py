@@ -33,6 +33,8 @@ def test_schema_review_columns_required():
     assert "ctrader_account_notes" in cols
     assert "gemini_gold_outcomes" in _REQUIRED_COLUMNS
     assert "setup_type" in _REQUIRED_COLUMNS["gemini_gold_outcomes"]
+    assert "trade_sessions" in _REQUIRED_COLUMNS["gemini_gold_config"]
+    assert "custom_trade_hours_enabled" in _REQUIRED_COLUMNS["gemini_gold_config"]
     mig_tables = {t for t, _, _ in gemini_gold_postgres_migrations()}
     assert "gemini_gold_outcomes" in mig_tables
 

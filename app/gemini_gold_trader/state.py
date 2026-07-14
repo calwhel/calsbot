@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 class RuntimeStatus:
     status: str = "dormant"
     active_session: Optional[str] = None
+    dormant_reason: Optional[str] = None
     last_scan_at: Optional[str] = None
     last_decision: Optional[Dict[str, Any]] = None
     last_error: Optional[str] = None
@@ -27,13 +28,15 @@ def get_status() -> Dict[str, Any]:
 def note_scan(session: Optional[str]) -> None:
     _STATUS.status = "scanning" if session else "dormant"
     _STATUS.active_session = session
+    _STATUS.dormant_reason = None
     _STATUS.last_scan_at = datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
     _STATUS.loop_iterations += 1
 
 
 def note_dormant(reason: str = "outside_session") -> None:
-    _STATUS.status = "dormant" if reason == "outside_session" else reason
+    _STATUS.status = "dormant"
     _STATUS.active_session = None
+    _STATUS.dormant_reason = reason
 
 
 def note_decision(decision: Dict[str, Any]) -> None:

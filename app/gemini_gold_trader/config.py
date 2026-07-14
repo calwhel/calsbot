@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, List, Optional, Tuple
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -75,6 +75,10 @@ class GeminiGoldRuntimeConfig:
     orb_confidence_threshold: int
     orb_max_calls_day: int
     orb_max_trades_per_session: int
+    trade_sessions: Tuple[str, ...]
+    custom_trade_hours_enabled: bool
+    trade_hours_start_utc: str
+    trade_hours_end_utc: str
     chart_bars: int
     chart_bars_1m: int
     min_sl_pips: float
@@ -149,6 +153,12 @@ def env_defaults() -> GeminiGoldRuntimeConfig:
         orb_confidence_threshold=_env_int("GEMINI_GOLD_ORB_CONFIDENCE_THRESHOLD", 65),
         orb_max_calls_day=_env_int("GEMINI_GOLD_ORB_MAX_CALLS_DAY", 20),
         orb_max_trades_per_session=_env_int("GEMINI_GOLD_ORB_MAX_TRADES_PER_SESSION", 1),
+        trade_sessions=("asia", "london", "new_york"),
+        custom_trade_hours_enabled=_env_bool("GEMINI_GOLD_CUSTOM_TRADE_HOURS", False),
+        trade_hours_start_utc=os.environ.get("GEMINI_GOLD_TRADE_HOURS_START_UTC", "12:00").strip()
+        or "12:00",
+        trade_hours_end_utc=os.environ.get("GEMINI_GOLD_TRADE_HOURS_END_UTC", "21:00").strip()
+        or "21:00",
         chart_bars=max(20, _env_int("GEMINI_GOLD_CHART_BARS", 80)),
         chart_bars_1m=max(20, _env_int("GEMINI_GOLD_CHART_BARS_1M", 60)),
         min_sl_pips=_env_float("GEMINI_GOLD_MIN_SL_PIPS", 10.0),

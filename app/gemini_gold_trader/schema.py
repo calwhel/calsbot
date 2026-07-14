@@ -44,6 +44,10 @@ _GEMINI_GOLD_COLUMN_ALTERS: tuple[tuple[str, str, str], ...] = (
     ("gemini_gold_config", "orb_confidence_threshold", "INTEGER DEFAULT 65 NOT NULL"),
     ("gemini_gold_config", "orb_max_calls_day", "INTEGER DEFAULT 20 NOT NULL"),
     ("gemini_gold_config", "orb_max_trades_per_session", "INTEGER DEFAULT 1 NOT NULL"),
+    ("gemini_gold_config", "trade_sessions", "JSON"),
+    ("gemini_gold_config", "custom_trade_hours_enabled", "BOOLEAN DEFAULT FALSE NOT NULL"),
+    ("gemini_gold_config", "trade_hours_start_utc", "VARCHAR(5) DEFAULT '12:00' NOT NULL"),
+    ("gemini_gold_config", "trade_hours_end_utc", "VARCHAR(5) DEFAULT '21:00' NOT NULL"),
     ("gemini_gold_decisions", "setup_type", "VARCHAR(64)"),
     ("gemini_gold_outcomes", "setup_type", "VARCHAR(64)"),
     ("gemini_gold_reviews", "timing_insights", "JSON"),
@@ -73,6 +77,10 @@ _REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
         "orb_confidence_threshold",
         "orb_max_calls_day",
         "orb_max_trades_per_session",
+        "trade_sessions",
+        "custom_trade_hours_enabled",
+        "trade_hours_start_utc",
+        "trade_hours_end_utc",
     ),
     "gemini_gold_reviews": (
         "timing_insights",
@@ -256,6 +264,10 @@ def seed_config_if_missing(db) -> GeminiGoldConfig:
         orb_confidence_threshold=d.orb_confidence_threshold,
         orb_max_calls_day=d.orb_max_calls_day,
         orb_max_trades_per_session=d.orb_max_trades_per_session,
+        trade_sessions=list(d.trade_sessions),
+        custom_trade_hours_enabled=d.custom_trade_hours_enabled,
+        trade_hours_start_utc=d.trade_hours_start_utc,
+        trade_hours_end_utc=d.trade_hours_end_utc,
         confidence_threshold=d.confidence_threshold,
     )
     db.add(row)

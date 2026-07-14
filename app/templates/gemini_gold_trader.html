@@ -221,6 +221,29 @@
       <button class="btn btn-primary" id="btn-save-size" style="width:100%;margin-top:.65rem">Save size & limits</button>
     </section>
 
+    <section class="card" id="trade-hours-card">
+      <h2 style="font-size:.85rem;margin-bottom:.35rem">Trading hours</h2>
+      <p class="hint">Choose when the trader scans and fires. Times are UTC. AI scan uses win-rate-by-hour to suggest the best windows.</p>
+      <div id="trade-session-checks" style="display:grid;gap:.45rem;margin:.65rem 0"></div>
+      <label style="display:flex;align-items:center;gap:.5rem;margin:.5rem 0">
+        <input type="checkbox" id="toggle-custom-trade-hours"/>
+        <span>Also limit to custom UTC window (intersects with sessions above)</span>
+      </label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.65rem">
+        <div>
+          <label for="trade-hours-start">Start (UTC)</label>
+          <input id="trade-hours-start" type="time" value="12:00"/>
+        </div>
+        <div>
+          <label for="trade-hours-end">End (UTC)</label>
+          <input id="trade-hours-end" type="time" value="21:00"/>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="btn-save-trade-hours" style="width:100%;margin-top:.65rem">Save trading hours</button>
+      <h3 style="font-size:.75rem;margin:1rem 0 .35rem;color:var(--dim)">Best win hours (14d)</h3>
+      <div id="hour-performance-stats"><p class="hint">Run trades or AI scan to populate.</p></div>
+    </section>
+
     <section class="card" id="ctrader-card">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.35rem">
         <h2 style="font-size:.85rem">cTrader account</h2>
@@ -426,6 +449,47 @@ function renderExecutionReadiness(er) {
   </div>`;
 }
 
+function renderTradeHours(j) {
+  const cfg = j.config || {};
+  const catalog = j.trade_session_catalog || [];
+  const enabled = new Set((cfg.trade_sessions || ['asia','london','new_york']).map(s => String(s).toLowerCase()));
+  const box = document.getElementById('trade-session-checks');
+  if (box) {
+    box.innerHTML = catalog.map(s => {
+      const on = enabled.has(s.id);
+      return `<label style="display:flex;align-items:center;gap:.5rem">
+        <input type="checkbox" class="trade-session-cb" data-session="${escapeHtml(s.id)}" ${on ? 'checked' : ''}/>
+        <span><b>${escapeHtml(s.label)}</b> <span class="hint">${escapeHtml(s.clock)}</span></span>
+      </label>`;
+    }).join('');
+  }
+  const custom = document.getElementById('toggle-custom-trade-hours');
+  if (custom) custom.checked = !!cfg.custom_trade_hours_enabled;
+  const startEl = document.getElementById('trade-hours-start');
+  const endEl = document.getElementById('trade-hours-end');
+  if (startEl && cfg.trade_hours_start_utc) startEl.value = cfg.trade_hours_start_utc;
+  if (endEl && cfg.trade_hours_end_utc) endEl.value = cfg.trade_hours_end_utc;
+
+  const perf = j.hour_performance || {};
+  const el = document.getElementById('hour-performance-stats');
+  if (!el) return;
+  const best = perf.best_hours || [];
+  if (!best.length) {
+    const takes = (perf.by_hour || []).filter(h => (h.take_count || 0) > 0);
+    if (takes.length) {
+      el.innerHTML = takes.map(h =>
+        `<div class="setup-row"><span>${String(h.hour_utc).padStart(2,'0')}:00 UTC</span><span>${h.take_count} takes · no closes yet</span></div>`
+      ).join('');
+      return;
+    }
+    el.innerHTML = '<p class="hint">No closed trades yet — best hours appear after wins/losses.</p>';
+    return;
+  }
+  el.innerHTML = best.map(h =>
+    `<div class="setup-row"><span>${String(h.hour_utc).padStart(2,'0')}:00 UTC</span><span>${h.trades} trades · ${h.win_rate_pct}% WR</span></div>`
+  ).join('');
+}
+
 function renderStatus(j) {
   const cfg = j.config || {};
   window._ggLastCfg = cfg;
@@ -462,7 +526,8 @@ function renderStatus(j) {
   else if (!cfg.enabled) { title = 'OFF'; sub = 'Flip the trader switch to start scanning'; }
   else if (!envOn) { title = 'ENV OFF'; sub = 'Set GEMINI_GOLD_ENABLED=true in Railway'; }
   else if (rt.status === 'scanning') { title = 'SCANNING'; sub = `Session: ${fmtSession(rt.active_session)} · ${live ? 'Live' : 'Demo'}`; }
-  else { title = String(rt.status || 'idle').toUpperCase(); sub = rt.active_session ? fmtSession(rt.active_session) : 'Outside session windows'; }
+  else if (rt.dormant_reason === 'outside_trade_hours') { title = 'DORMANT'; sub = 'Outside your custom UTC trading window'; }
+  else { title = String(rt.status || 'idle').toUpperCase(); sub = rt.active_session ? fmtSession(rt.active_session) : (rt.dormant_reason === 'outside_session' ? 'Outside enabled sessions' : 'Outside session windows'); }
 
   document.getElementById('status-line').textContent = title;
   document.getElementById('session-line').textContent = sub;
@@ -641,6 +706,7 @@ async function loadCalibration() {
     renderReview(j.latest_review[0]);
     document.getElementById('review-status').textContent = 'Last scan loaded — run again to refresh.';
   }
+  if (j.hour_performance) renderTradeHours(j);
   renderFunnel(j.funnel || {}, j.recent_funnel_events || []);
   const statsEl = document.getElementById('setup-stats');
   const stats = j.setup_stats || [];
@@ -902,6 +968,7 @@ async function refresh({ bindInputs = true } = {}) {
   window._ggLastStatus = j;
   renderStatus(j);
   renderTradingSetup(j, { bindInputs });
+  renderTradeHours(j);
   const cfg = j.config || {};
   const chip = document.getElementById('review-model-chip');
   if (chip && cfg.review_model) chip.textContent = cfg.review_model.replace('gemini-', '');
@@ -1036,6 +1103,32 @@ document.getElementById('btn-save-size').onclick = async () => {
   }
   _clearSetupDirty();
   showToast('Size & limits saved');
+  refresh();
+};
+
+document.getElementById('btn-save-trade-hours').onclick = async () => {
+  const sessions = [...document.querySelectorAll('.trade-session-cb')]
+    .filter(cb => cb.checked)
+    .map(cb => cb.dataset.session);
+  if (!sessions.length) {
+    showToast('Select at least one session');
+    return;
+  }
+  const body = {
+    trade_sessions: sessions,
+    custom_trade_hours_enabled: document.getElementById('toggle-custom-trade-hours').checked,
+    trade_hours_start_utc: document.getElementById('trade-hours-start').value || '12:00',
+    trade_hours_end_utc: document.getElementById('trade-hours-end').value || '21:00',
+  };
+  const r = await _apiFetch(`/api/gemini-gold-trader/config?uid=${encodeURIComponent(UID)}`, {
+    method: 'POST', body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    showToast(err.detail || 'Save failed');
+    return;
+  }
+  showToast('Trading hours saved');
   refresh();
 };
 
