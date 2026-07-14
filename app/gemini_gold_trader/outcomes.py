@@ -3,11 +3,78 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from sqlalchemy import or_
 
 from app.gemini_gold_trader.models import GeminiGoldDecision, GeminiGoldOutcome
 
 logger = logging.getLogger(__name__)
+
+_GEMINI_BROKER_NOTES = "gemini_gold_trader decision_id=%"
+_CLOSED_OUTCOMES: Tuple[str, ...] = ("WIN", "LOSS", "BREAKEVEN")
+
+
+def decision_id_from_execution(ex) -> Optional[int]:
+    notes = ex.notes or ""
+    if "decision_id=" in notes:
+        try:
+            return int(notes.split("decision_id=")[1].split()[0].strip("|"))
+        except (ValueError, IndexError):
+            pass
+    if ex.conditions_met:
+        try:
+            return int((ex.conditions_met or {}).get("gemini_gold_decision_id"))
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def gemini_broker_executions_query(
+    db,
+    *,
+    user_id: int,
+    since: Optional[datetime] = None,
+    ctrader_account_id: Optional[str] = None,
+    closed_only: bool = False,
+    outcomes: Optional[Sequence[str]] = None,
+):
+    """StrategyExecution rows for Gemini Gold on the configured cTrader account."""
+    from app.strategy_models import StrategyExecution
+
+    q = db.query(StrategyExecution).filter(
+        StrategyExecution.user_id == int(user_id),
+        StrategyExecution.symbol == "XAUUSD",
+        StrategyExecution.notes.like(_GEMINI_BROKER_NOTES),
+    )
+    if closed_only:
+        q = q.filter(
+            StrategyExecution.closed_at.isnot(None),
+            StrategyExecution.outcome.in_(tuple(outcomes or _CLOSED_OUTCOMES)),
+        )
+        if since is not None:
+            q = q.filter(StrategyExecution.closed_at >= since)
+    elif since is not None:
+        q = q.filter(StrategyExecution.fired_at >= since)
+
+    if ctrader_account_id:
+        ctid = str(ctrader_account_id).strip()
+        q = q.filter(
+            or_(
+                StrategyExecution.ctrader_account_id == ctid,
+                StrategyExecution.ctrader_account_id.is_(None),
+            )
+        )
+    return q
+
+
+def broker_outcome_label(outcome: Optional[str]) -> str:
+    raw = str(outcome or "").upper()
+    if raw == "WIN":
+        return "win"
+    if raw == "LOSS":
+        return "loss"
+    return "breakeven"
 
 
 def compute_r_multiple(
@@ -95,35 +162,29 @@ def sync_closed_outcomes(db, user_id: int) -> int:
     )
     recorded = 0
     for ex in rows:
-        notes = ex.notes or ""
-        decision_id = None
-        if "decision_id=" in notes:
-            try:
-                decision_id = int(notes.split("decision_id=")[1].split()[0].strip("|"))
-            except (ValueError, IndexError):
-                pass
-        if not decision_id and ex.conditions_met:
-            try:
-                decision_id = int((ex.conditions_met or {}).get("gemini_gold_decision_id"))
-            except (TypeError, ValueError):
-                pass
+        decision_id = decision_id_from_execution(ex)
         if decision_id and record_outcome_from_execution(db, decision_id, ex):
             recorded += 1
     return recorded
 
 
-def recent_closed_trades_feed(db, user_id: int, *, limit: int = 25) -> List[Dict[str, Any]]:
-    """Closed gemini gold trades for portal — broker execution rows + outcome stats."""
+def recent_closed_trades_feed(
+    db,
+    user_id: int,
+    *,
+    limit: int = 25,
+    ctrader_account_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Closed gemini gold trades for portal — cTrader StrategyExecution rows."""
     from app.strategy_models import StrategyExecution
 
     rows = (
-        db.query(StrategyExecution)
-        .filter(
-            StrategyExecution.user_id == user_id,
-            StrategyExecution.symbol == "XAUUSD",
-            StrategyExecution.notes.like("%gemini_gold_trader%"),
-            StrategyExecution.closed_at.isnot(None),
-            StrategyExecution.outcome.in_(("WIN", "LOSS", "BREAKEVEN", "CANCELLED")),
+        gemini_broker_executions_query(
+            db,
+            user_id=int(user_id),
+            ctrader_account_id=ctrader_account_id,
+            closed_only=True,
+            outcomes=("WIN", "LOSS", "BREAKEVEN", "CANCELLED"),
         )
         .order_by(StrategyExecution.closed_at.desc())
         .limit(max(1, min(limit, 50)))
@@ -131,14 +192,7 @@ def recent_closed_trades_feed(db, user_id: int, *, limit: int = 25) -> List[Dict
     )
     outcome_by_decision: Dict[int, Any] = {}
     if rows:
-        decision_ids: List[int] = []
-        for ex in rows:
-            notes = ex.notes or ""
-            if "decision_id=" in notes:
-                try:
-                    decision_ids.append(int(notes.split("decision_id=")[1].split()[0].strip("|")))
-                except (ValueError, IndexError):
-                    pass
+        decision_ids = [did for ex in rows if (did := decision_id_from_execution(ex))]
         if decision_ids:
             from app.gemini_gold_trader.models import GeminiGoldOutcome
 
@@ -151,13 +205,7 @@ def recent_closed_trades_feed(db, user_id: int, *, limit: int = 25) -> List[Dict
 
     out: List[Dict[str, Any]] = []
     for ex in rows:
-        decision_id = None
-        notes = ex.notes or ""
-        if "decision_id=" in notes:
-            try:
-                decision_id = int(notes.split("decision_id=")[1].split()[0].strip("|"))
-            except (ValueError, IndexError):
-                pass
+        decision_id = decision_id_from_execution(ex)
         setup_type = None
         if decision_id and decision_id in outcome_by_decision:
             setup_type = outcome_by_decision[decision_id].setup_type

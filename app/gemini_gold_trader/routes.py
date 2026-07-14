@@ -408,7 +408,9 @@ async def api_status(uid: str = Query(...)):
                 from app.gemini_gold_trader.outcomes import recent_closed_trades_feed, sync_closed_outcomes
 
                 sync_closed_outcomes(db, int(trader_uid))
-                closed_trades = recent_closed_trades_feed(db, int(trader_uid), limit=25)
+                closed_trades = recent_closed_trades_feed(
+                    db, int(trader_uid), limit=25, ctrader_account_id=active_ctid
+                )
             except Exception as exc:
                 logger.warning("[gemini-gold] closed trades feed failed: %s", exc)
 
@@ -444,7 +446,12 @@ async def api_status(uid: str = Query(...)):
             "runtime": runtime_state.get_status(),
             "shared_session_hours": gold_ai_session_hours(),
             "trade_session_catalog": trade_session_catalog(),
-            "hour_performance": hour_performance_stats(db, days=14),
+            "hour_performance": hour_performance_stats(
+                db,
+                days=14,
+                user_id=int(trader_uid) if trader_uid else None,
+                ctrader_account_id=active_ctid,
+            ),
             "config": _config_payload(cfg, row, env),
             "demo_accounts": demo_accounts,
             "live_accounts": live_accounts,
@@ -653,8 +660,20 @@ async def api_setup_stats(uid: str = Query(...), days: int = Query(14)):
     ensure_gemini_gold_trader_schema()
     db = SessionLocal()
     try:
-        _resolve_user(uid, db)
-        return {"ok": True, "days": days, "stats": get_setup_stats(db, days=days)}
+        admin = _resolve_user(uid, db)
+        row = seed_config_if_missing(db)
+        cfg = merge_config(row, env_defaults())
+        trader_uid = _trader_user_id(cfg, admin)
+        return {
+            "ok": True,
+            "days": days,
+            "stats": get_setup_stats(
+                db,
+                days=days,
+                user_id=int(trader_uid) if trader_uid else None,
+                ctrader_account_id=active_ctrader_account_id(cfg),
+            ),
+        }
     finally:
         db.close()
 
@@ -680,12 +699,33 @@ async def api_calibration(uid: str = Query(...), days: int = Query(14)):
     ensure_gemini_gold_trader_schema()
     db = SessionLocal()
     try:
-        _resolve_user(uid, db)
+        admin = _resolve_user(uid, db)
+        row = seed_config_if_missing(db)
+        cfg = merge_config(row, env_defaults())
+        trader_uid = _trader_user_id(cfg, admin)
+        ctid = active_ctrader_account_id(cfg)
+        if trader_uid:
+            try:
+                from app.gemini_gold_trader.outcomes import sync_closed_outcomes
+
+                sync_closed_outcomes(db, int(trader_uid))
+            except Exception as exc:
+                logger.warning("[gemini-gold] calibration outcome sync failed: %s", exc)
         return {
             "ok": True,
             "funnel": funnel_snapshot(),
-            "setup_stats": get_setup_stats(db, days=days),
-            "hour_performance": hour_performance_stats(db, days=days),
+            "setup_stats": get_setup_stats(
+                db,
+                days=days,
+                user_id=int(trader_uid) if trader_uid else None,
+                ctrader_account_id=ctid,
+            ),
+            "hour_performance": hour_performance_stats(
+                db,
+                days=days,
+                user_id=int(trader_uid) if trader_uid else None,
+                ctrader_account_id=ctid,
+            ),
             "trade_session_catalog": trade_session_catalog(),
             "call_stats_today": call_stats_today(db),
             "recent_funnel_events": _safe_funnel_events(db, limit=60),

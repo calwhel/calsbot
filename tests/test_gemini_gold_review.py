@@ -1,7 +1,7 @@
 """Gemini Gold AI performance review prompt blocks."""
 import os
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
@@ -24,44 +24,37 @@ def _cfg():
 def test_timing_analysis_block_hour_and_hold_stats():
     db = MagicMock()
     now = datetime.utcnow()
-    dec1 = GeminiGoldDecision(
-        id=1,
-        ts=now - timedelta(hours=3),
-        session="ny",
-        action="TAKE",
-        executed=True,
-        confidence=88,
-    )
-    out1 = GeminiGoldOutcome(
-        decision_id=1,
-        session="ny",
-        result="win",
-        closed_ts=now - timedelta(hours=2, minutes=30),
-    )
-    dec2 = GeminiGoldDecision(
-        id=2,
-        ts=now - timedelta(hours=1),
-        session="ny",
-        action="TAKE",
-        executed=True,
-        confidence=82,
-    )
-    out2 = GeminiGoldOutcome(
-        decision_id=2,
-        session="ny",
-        result="loss",
-        closed_ts=now - timedelta(minutes=30),
-    )
-    db.query.return_value.join.return_value.filter.return_value.order_by.return_value.all.return_value = [
-        (out1, dec1),
-        (out2, dec2),
-    ]
-    lines = _timing_analysis_block(db, days=14)
+    ex1 = MagicMock()
+    ex1.fired_at = now - timedelta(hours=3)
+    ex1.closed_at = now - timedelta(hours=2, minutes=30)
+    ex2 = MagicMock()
+    ex2.fired_at = now - timedelta(hours=1)
+    ex2.closed_at = now - timedelta(minutes=30)
+
+    closed_q = MagicMock()
+    closed_q.order_by.return_value.all.return_value = [ex1, ex2]
+    perf = {
+        "overall_win_rate_pct": 50.0,
+        "total_closed_trades": 2,
+        "by_hour": [{"hour_utc": 8, "trades": 2, "win_rate_pct": 50.0}],
+        "by_session": [{"session": "new_york", "trades": 2, "win_rate_pct": 50.0}],
+        "best_hours": [{"hour_utc": 8, "trades": 2, "win_rate_pct": 50.0}],
+        "worst_hours": [],
+    }
+    with patch(
+        "app.gemini_gold_trader.review.gemini_broker_executions_query",
+        return_value=closed_q,
+    ), patch(
+        "app.gemini_gold_trader.review.hour_performance_stats",
+        return_value=perf,
+    ):
+        lines = _timing_analysis_block(db, days=14, user_id=42, ctrader_account_id="12345")
     text = "\n".join(lines)
     assert "TIMING ANALYSIS" in text
+    assert "cTrader account" in text
     assert "UTC hour" in text
     assert "Hold time" in text
-    assert "ny" in text
+    assert "new_york" in text
 
 
 def test_aggressiveness_block_rates_and_caps():

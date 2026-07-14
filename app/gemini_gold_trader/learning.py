@@ -2,21 +2,61 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from app.gemini_gold_trader.models import GeminiGoldDecision, GeminiGoldOutcome
+from app.gemini_gold_trader.models import GeminiGoldDecision
+from app.gemini_gold_trader.outcomes import (
+    broker_outcome_label,
+    decision_id_from_execution,
+    gemini_broker_executions_query,
+)
+from app.services.forex_sessions import active_live_forex_session
 
 
-def get_setup_stats(db, *, days: int = 14) -> List[Dict[str, Any]]:
+def get_setup_stats(
+    db,
+    *,
+    days: int = 14,
+    user_id: Optional[int] = None,
+    ctrader_account_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Closed-trade stats from cTrader StrategyExecution rows (broker ground truth)."""
     since = datetime.utcnow() - timedelta(days=days)
-    rows = (
-        db.query(GeminiGoldOutcome)
-        .filter(GeminiGoldOutcome.closed_ts.isnot(None), GeminiGoldOutcome.closed_ts >= since)
-        .all()
-    )
+    if not user_id:
+        return []
+
+    rows = gemini_broker_executions_query(
+        db,
+        user_id=int(user_id),
+        since=since,
+        ctrader_account_id=ctrader_account_id,
+        closed_only=True,
+    ).all()
+
+    decision_ids = [did for ex in rows if (did := decision_id_from_execution(ex))]
+    decision_meta: Dict[int, GeminiGoldDecision] = {}
+    if decision_ids:
+        for dec in (
+            db.query(GeminiGoldDecision)
+            .filter(GeminiGoldDecision.id.in_(decision_ids))
+            .all()
+        ):
+            decision_meta[int(dec.id)] = dec
+
     buckets: Dict[tuple, Dict[str, Any]] = {}
-    for o in rows:
-        key = (o.setup_type or "unknown", o.session or "unknown")
+    for ex in rows:
+        dec = decision_meta.get(int(decision_id_from_execution(ex) or 0))
+        setup_type = None
+        if dec:
+            setup_type = dec.setup_type
+            if not setup_type and isinstance(dec.decision, dict):
+                setup_type = dec.decision.get("setup_type")
+        setup_type = str(setup_type or "unknown")
+        ts = ex.fired_at or ex.closed_at
+        sess = (getattr(dec, "session", None) if dec else None) or (
+            active_live_forex_session(ts) if ts else None
+        ) or "unknown"
+        key = (setup_type, str(sess).lower())
         b = buckets.setdefault(
             key,
             {
@@ -32,16 +72,14 @@ def get_setup_stats(db, *, days: int = 14) -> List[Dict[str, Any]]:
             },
         )
         b["trades"] += 1
-        if o.result == "win":
+        result = broker_outcome_label(ex.outcome)
+        if result == "win":
             b["wins"] += 1
-        elif o.result == "loss":
+        elif result == "loss":
             b["losses"] += 1
         else:
             b["breakevens"] += 1
-        b["total_pnl"] += float(o.pnl or 0)
-        if o.r_multiple is not None:
-            b["r_sum"] += float(o.r_multiple)
-            b["r_count"] += 1
+        b["total_pnl"] += float(ex.pnl_pct or 0)
 
     out = []
     for b in buckets.values():

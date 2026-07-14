@@ -223,7 +223,7 @@
 
     <section class="card" id="trade-hours-card">
       <h2 style="font-size:.85rem;margin-bottom:.35rem">Trading hours</h2>
-      <p class="hint">Choose when the trader scans and fires. Times are UTC. AI scan uses win-rate-by-hour to suggest the best windows.</p>
+      <p class="hint">Choose when the trader scans and fires. Times are UTC. Win hours below use your cTrader demo account closes (same data as Closed trades).</p>
       <div id="trade-session-checks" style="display:grid;gap:.45rem;margin:.65rem 0"></div>
       <label style="display:flex;align-items:center;gap:.5rem;margin:.5rem 0">
         <input type="checkbox" id="toggle-custom-trade-hours"/>
@@ -240,7 +240,7 @@
         </div>
       </div>
       <button class="btn btn-primary" id="btn-save-trade-hours" style="width:100%;margin-top:.65rem">Save trading hours</button>
-      <h3 style="font-size:.75rem;margin:1rem 0 .35rem;color:var(--dim)">Best win hours (14d)</h3>
+      <h3 style="font-size:.75rem;margin:1rem 0 .35rem;color:var(--dim)">Best win hours (14d · cTrader)</h3>
       <div id="hour-performance-stats"><p class="hint">Run trades or AI scan to populate.</p></div>
     </section>
 
@@ -473,19 +473,23 @@ function renderTradeHours(j) {
   const perf = j.hour_performance || {};
   const el = document.getElementById('hour-performance-stats');
   if (!el) return;
+  const acct = perf.ctrader_account_id ? ` · acct #${perf.ctrader_account_id}` : '';
+  const overall = perf.total_closed_trades
+    ? `${perf.total_closed_trades} closes · ${perf.overall_win_rate_pct ?? 0}% WR${acct}`
+    : '';
   const best = perf.best_hours || [];
   if (!best.length) {
     const takes = (perf.by_hour || []).filter(h => (h.take_count || 0) > 0);
     if (takes.length) {
-      el.innerHTML = takes.map(h =>
-        `<div class="setup-row"><span>${String(h.hour_utc).padStart(2,'0')}:00 UTC</span><span>${h.take_count} takes · no closes yet</span></div>`
+      el.innerHTML = (overall ? `<p class="hint">${escapeHtml(overall)}</p>` : '') + takes.map(h =>
+        `<div class="setup-row"><span>${String(h.hour_utc).padStart(2,'0')}:00 UTC</span><span>${h.take_count} fires · no closes yet</span></div>`
       ).join('');
       return;
     }
-    el.innerHTML = '<p class="hint">No closed trades yet — best hours appear after wins/losses.</p>';
+    el.innerHTML = '<p class="hint">No closed XAUUSD bot trades on your cTrader account yet.</p>';
     return;
   }
-  el.innerHTML = best.map(h =>
+  el.innerHTML = (overall ? `<p class="hint" style="margin-bottom:.35rem">${escapeHtml(overall)}</p>` : '') + best.map(h =>
     `<div class="setup-row"><span>${String(h.hour_utc).padStart(2,'0')}:00 UTC</span><span>${h.trades} trades · ${h.win_rate_pct}% WR</span></div>`
   ).join('');
 }

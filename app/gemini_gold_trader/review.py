@@ -26,6 +26,7 @@ from app.gemini_gold_trader.learning import call_stats_today, get_setup_stats
 from app.gemini_gold_trader.timing_stats import hour_performance_stats
 from app.gemini_gold_trader.trade_hours import trade_schedule_summary
 from app.gemini_gold_trader.models import GeminiGoldDecision, GeminiGoldOutcome, GeminiGoldReview
+from app.gemini_gold_trader.outcomes import decision_id_from_execution, gemini_broker_executions_query
 
 logger = logging.getLogger(__name__)
 
@@ -211,14 +212,12 @@ def _recent_broker_closes_block(db, *, user_id: int, days: int, limit: int = 15)
 
     since = datetime.utcnow() - timedelta(days=days)
     rows = (
-        db.query(StrategyExecution)
-        .filter(
-            StrategyExecution.user_id == user_id,
-            StrategyExecution.symbol == "XAUUSD",
-            StrategyExecution.notes.like("%gemini_gold_trader%"),
-            StrategyExecution.closed_at.isnot(None),
-            StrategyExecution.closed_at >= since,
-            StrategyExecution.outcome.in_(("WIN", "LOSS", "BREAKEVEN", "CANCELLED")),
+        gemini_broker_executions_query(
+            db,
+            user_id=user_id,
+            since=since,
+            closed_only=True,
+            outcomes=("WIN", "LOSS", "BREAKEVEN", "CANCELLED"),
         )
         .order_by(StrategyExecution.closed_at.desc())
         .limit(limit)
@@ -405,66 +404,81 @@ async def _fetch_ctrader_account_snapshot(
     return snap
 
 
-def _timing_analysis_block(db, *, days: int) -> List[str]:
-    """Hour/session timing, hold duration, and inter-trade gaps."""
+def _timing_analysis_block(
+    db,
+    *,
+    days: int,
+    user_id: int,
+    ctrader_account_id: Optional[str] = None,
+) -> List[str]:
+    """Hour/session timing from cTrader StrategyExecution closes (entry time UTC)."""
+    from app.strategy_models import StrategyExecution
+
     since = datetime.utcnow() - timedelta(days=days)
     rows = (
-        db.query(GeminiGoldOutcome, GeminiGoldDecision)
-        .join(GeminiGoldDecision, GeminiGoldDecision.id == GeminiGoldOutcome.decision_id)
-        .filter(
-            GeminiGoldOutcome.closed_ts.isnot(None),
-            GeminiGoldOutcome.closed_ts >= since,
-            GeminiGoldDecision.executed.is_(True),
+        gemini_broker_executions_query(
+            db,
+            user_id=int(user_id),
+            since=since,
+            ctrader_account_id=ctrader_account_id,
+            closed_only=True,
         )
-        .order_by(GeminiGoldDecision.ts.asc())
+        .order_by(StrategyExecution.fired_at.asc())
         .all()
     )
-    lines = [f"=== TIMING ANALYSIS ({days}d) ==="]
+    lines = [
+        f"=== TIMING ANALYSIS ({days}d, cTrader account #{ctrader_account_id or '?'}) ===",
+    ]
     if not rows:
-        lines.append("No executed closed trades for timing stats.")
+        lines.append("No closed gemini_gold_trader executions on this cTrader account in window.")
+        perf = hour_performance_stats(
+            db,
+            days=days,
+            min_trades=1,
+            user_id=user_id,
+            ctrader_account_id=ctrader_account_id,
+        )
+        if perf.get("by_hour"):
+            lines.append("Fired trades by UTC hour (no closes yet):")
+            for b in perf.get("by_hour") or []:
+                if int(b.get("take_count") or 0) > 0:
+                    lines.append(f"  {int(b['hour_utc']):02d}:00 UTC — {b['take_count']} fires")
         return lines
 
-    hour_buckets: Dict[int, Dict[str, int]] = {}
-    session_buckets: Dict[str, Dict[str, int]] = {}
     hold_mins: List[float] = []
     gaps_min: List[float] = []
     last_exec_ts: Optional[datetime] = None
+    for ex in rows:
+        if ex.fired_at and ex.closed_at:
+            hold_mins.append((ex.closed_at - ex.fired_at).total_seconds() / 60.0)
+        if ex.fired_at and last_exec_ts:
+            gaps_min.append((ex.fired_at - last_exec_ts).total_seconds() / 60.0)
+        if ex.fired_at:
+            last_exec_ts = ex.fired_at
 
-    for out, dec in rows:
-        ts = dec.ts or out.closed_ts
-        if ts:
-            h = int(ts.hour)
-            b = hour_buckets.setdefault(h, {"trades": 0, "wins": 0, "losses": 0})
-            b["trades"] += 1
-            if out.result == "win":
-                b["wins"] += 1
-            elif out.result == "loss":
-                b["losses"] += 1
-        sess = (out.session or dec.session or "unknown").lower()
-        sb = session_buckets.setdefault(sess, {"trades": 0, "wins": 0, "losses": 0})
-        sb["trades"] += 1
-        if out.result == "win":
-            sb["wins"] += 1
-        elif out.result == "loss":
-            sb["losses"] += 1
-        if dec.ts and out.closed_ts:
-            hold_mins.append((out.closed_ts - dec.ts).total_seconds() / 60.0)
-        if dec.ts and last_exec_ts:
-            gaps_min.append((dec.ts - last_exec_ts).total_seconds() / 60.0)
-        if dec.ts:
-            last_exec_ts = dec.ts
-
-    lines.append("Win rate by UTC hour (executed closes):")
-    for h in sorted(hour_buckets):
-        b = hour_buckets[h]
-        wr = round(100.0 * b["wins"] / b["trades"], 1) if b["trades"] else 0
-        lines.append(f"  {h:02d}:00 UTC — {b['trades']} trades, WR {wr}%")
+    perf = hour_performance_stats(
+        db,
+        days=days,
+        min_trades=2,
+        user_id=user_id,
+        ctrader_account_id=ctrader_account_id,
+    )
+    lines.append(
+        f"Overall WR: {perf.get('overall_win_rate_pct', 0)}% "
+        f"({perf.get('total_closed_trades', 0)} closed trades, source=ctrader_executions)"
+    )
+    lines.append("Win rate by UTC hour at entry (fired_at):")
+    for b in perf.get("by_hour") or []:
+        if int(b.get("trades") or 0) > 0:
+            lines.append(
+                f"  {int(b['hour_utc']):02d}:00 UTC — {b['trades']} trades, WR {b['win_rate_pct']}%"
+            )
 
     lines.append("Win rate by session:")
-    for sess in sorted(session_buckets):
-        b = session_buckets[sess]
-        wr = round(100.0 * b["wins"] / b["trades"], 1) if b["trades"] else 0
-        lines.append(f"  {sess}: {b['trades']} trades, WR {wr}%")
+    for b in perf.get("by_session") or []:
+        lines.append(
+            f"  {b['session']}: {b['trades']} trades, WR {b.get('win_rate_pct', 0)}%"
+        )
 
     if hold_mins:
         hold_mins.sort()
@@ -481,7 +495,6 @@ def _timing_analysis_block(db, *, days: int) -> List[str]:
             f"min {gaps_min[0]:.0f}m, max {gaps_min[-1]:.0f}m"
         )
 
-    perf = hour_performance_stats(db, days=days, min_trades=2)
     if perf.get("best_hours"):
         lines.append("Best UTC hours (min 2 closed trades):")
         for b in perf["best_hours"]:
@@ -494,11 +507,6 @@ def _timing_analysis_block(db, *, days: int) -> List[str]:
             lines.append(
                 f"  {int(b['hour_utc']):02d}:00 UTC — {b['trades']} trades, WR {b['win_rate_pct']}%"
             )
-    if not perf.get("total_closed_trades"):
-        lines.append("Take volume by UTC hour (no closed trades yet):")
-        for b in perf.get("by_hour") or []:
-            if int(b.get("take_count") or 0) > 0:
-                lines.append(f"  {int(b['hour_utc']):02d}:00 UTC — {b['take_count']} takes")
     return lines
 
 
@@ -650,28 +658,60 @@ def _ctrader_account_block(account_snap: Dict[str, Any]) -> List[str]:
     return lines
 
 
-def _recent_closed_trades_block(db, *, days: int, limit: int = 25) -> List[str]:
+def _recent_closed_trades_block(
+    db,
+    *,
+    days: int,
+    user_id: int,
+    ctrader_account_id: Optional[str] = None,
+    limit: int = 25,
+) -> List[str]:
+    from app.strategy_models import StrategyExecution
+
     since = datetime.utcnow() - timedelta(days=days)
     rows = (
-        db.query(GeminiGoldOutcome, GeminiGoldDecision)
-        .join(GeminiGoldDecision, GeminiGoldDecision.id == GeminiGoldOutcome.decision_id)
-        .filter(GeminiGoldOutcome.closed_ts.isnot(None), GeminiGoldOutcome.closed_ts >= since)
-        .order_by(GeminiGoldOutcome.closed_ts.desc())
+        gemini_broker_executions_query(
+            db,
+            user_id=int(user_id),
+            since=since,
+            ctrader_account_id=ctrader_account_id,
+            closed_only=True,
+        )
+        .order_by(StrategyExecution.closed_at.desc())
         .limit(limit)
         .all()
     )
-    lines = [f"=== CLOSED TRADES ({days}d, up to {limit}) ==="]
+    lines = [
+        f"=== CLOSED TRADES ({days}d, cTrader #{ctrader_account_id or '?'}, up to {limit}) ===",
+    ]
     if not rows:
-        lines.append("No closed trades in window.")
+        lines.append("No closed gemini_gold_trader executions on this cTrader account.")
         return lines
-    for out, dec in rows:
-        d = dec.decision if isinstance(dec.decision, dict) else {}
+
+    decision_ids = [did for ex in rows if (did := decision_id_from_execution(ex))]
+    decision_meta: Dict[int, GeminiGoldDecision] = {}
+    if decision_ids:
+        for dec in (
+            db.query(GeminiGoldDecision)
+            .filter(GeminiGoldDecision.id.in_(decision_ids))
+            .all()
+        ):
+            decision_meta[int(dec.id)] = dec
+
+    for ex in rows:
+        dec = decision_meta.get(int(decision_id_from_execution(ex) or 0))
+        setup_type = getattr(dec, "setup_type", None) if dec else None
+        d = dec.decision if dec and isinstance(dec.decision, dict) else {}
+        hold_min = None
+        if ex.fired_at and ex.closed_at:
+            hold_min = round((ex.closed_at - ex.fired_at).total_seconds() / 60.0, 1)
         lines.append(
-            f"- {out.closed_ts} | {out.setup_type} | {out.session} | {out.result} | "
-            f"pnl={out.pnl:+.2f}% R={out.r_multiple} | {d.get('direction')} | "
-            f"entry={d.get('entry')} sl={d.get('stop_loss')} tp={d.get('take_profit')} | "
-            f"conf={dec.confidence}% | executed={dec.executed} | "
-            f"rationale={(dec.rationale or d.get('rationale') or '')[:100]}"
+            f"- fired={ex.fired_at} closed={ex.closed_at} | {setup_type or 'unknown'} | "
+            f"{ex.outcome} | pnl={float(ex.pnl_pct or 0):+.2f}% "
+            f"(${float(ex.pnl_usd or 0):+.2f}) | {ex.direction} | "
+            f"entry={ex.entry_price} exit={ex.exit_price} | hold={hold_min}m | "
+            f"conf={getattr(dec, 'confidence', None)}% | "
+            f"broker_pos={ex.ctrader_position_id}"
         )
     return lines
 
@@ -711,7 +751,10 @@ def build_review_prompt(
     account_snap: Dict[str, Any],
 ) -> str:
     funnel = funnel_snapshot()
-    stats = get_setup_stats(db, days=days)
+    ctid = active_ctrader_account_id(cfg)
+    stats = get_setup_stats(
+        db, days=days, user_id=user_id, ctrader_account_id=ctid
+    )
     calls_today_stats = call_stats_today(db)
     events = recent_funnel_events(db, limit=40)
 
@@ -783,16 +826,17 @@ def build_review_prompt(
             f"reason={ev.get('reason')}"
         )
 
-    lines.extend(_recent_closed_trades_block(db, days=days))
+    lines.extend(_recent_closed_trades_block(db, days=days, user_id=user_id, ctrader_account_id=ctid))
     lines.extend(_blocked_takes_block(db, days=days))
-    lines.extend(_timing_analysis_block(db, days=days))
+    lines.extend(_timing_analysis_block(db, days=days, user_id=user_id, ctrader_account_id=ctid))
     lines.extend(_aggressiveness_block(db, cfg=cfg, days=days))
 
     lines.append("")
     lines.append(
         "Produce a structured review. You MUST analyze timing (hours/sessions/hold times) "
         "and aggressiveness (frequency vs caps, confidence, min_trade_gap). "
-        "Recommend optimal UTC trading windows in timing_insights — cite best_hours WR data. "
+        "Recommend optimal UTC trading windows in timing_insights — cite best_hours WR data "
+        "from cTrader StrategyExecution closes (fired_at hour), not internal outcome tables. "
         "Suggest trade_sessions / custom_trade_hours_* config changes when data supports it. "
         "ctrader_account_notes must summarize the cTrader broker account section "
         "(balance/equity, open positions, reconciliation, recent closes). "
