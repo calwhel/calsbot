@@ -58,7 +58,8 @@
     .btn-primary { background: var(--accent); border-color: var(--accent); color: #081018; }
     label { display: block; font-size: .7rem; font-weight: 600; color: var(--dim); margin-bottom: .35rem; }
     .hint { font-size: .7rem; color: var(--muted); margin: .25rem 0 .65rem; }
-    select, input[type=number] { width: 100%; background: #0e1118; border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: .55rem .65rem; font-size: .8125rem; }
+    select, input[type=number], input[type=time] { width: 100%; background: #0e1118; border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: .55rem .65rem; font-size: .8125rem; }
+    input[type=time] { color-scheme: dark; }
     .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; margin-top: .5rem; }
     .stat { background: #0e1118; border: 1px solid var(--border); border-radius: 8px; padding: .55rem; text-align: center; }
     .stat b { display: block; font-family: var(--font-mono); font-size: .95rem; }
@@ -175,6 +176,29 @@
       <div id="execution-readiness"></div>
     </section>
 
+    <section class="card" id="trade-hours-card">
+      <h2 style="font-size:.85rem;margin-bottom:.35rem">Trading hours</h2>
+      <p class="hint">Choose when the trader scans and fires. Times are UTC. Win hours below use your cTrader demo account closes (same data as Closed trades).</p>
+      <div id="trade-session-checks" style="display:grid;gap:.45rem;margin:.65rem 0"></div>
+      <label style="display:flex;align-items:center;gap:.5rem;margin:.5rem 0">
+        <input type="checkbox" id="toggle-custom-trade-hours"/>
+        <span>Also limit to custom UTC window (intersects with sessions above)</span>
+      </label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.65rem">
+        <div>
+          <label for="trade-hours-start">Start (UTC)</label>
+          <input id="trade-hours-start" type="time" value="12:00"/>
+        </div>
+        <div>
+          <label for="trade-hours-end">End (UTC)</label>
+          <input id="trade-hours-end" type="time" value="21:00"/>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="btn-save-trade-hours" style="width:100%;margin-top:.65rem">Save trading hours</button>
+      <h3 style="font-size:.75rem;margin:1rem 0 .35rem;color:var(--dim)">Best win hours (14d · cTrader)</h3>
+      <div id="hour-performance-stats"><p class="hint">Run trades or AI scan to populate.</p></div>
+    </section>
+
     <section class="card">
       <h2 style="font-size:.85rem;margin-bottom:.75rem">Trading setup</h2>
       <label>Execution mode</label>
@@ -219,29 +243,6 @@
         <input id="confidence-threshold" type="number" min="50" max="99" step="1" value="85"/>
       </div>
       <button class="btn btn-primary" id="btn-save-size" style="width:100%;margin-top:.65rem">Save size & limits</button>
-    </section>
-
-    <section class="card" id="trade-hours-card">
-      <h2 style="font-size:.85rem;margin-bottom:.35rem">Trading hours</h2>
-      <p class="hint">Choose when the trader scans and fires. Times are UTC. Win hours below use your cTrader demo account closes (same data as Closed trades).</p>
-      <div id="trade-session-checks" style="display:grid;gap:.45rem;margin:.65rem 0"></div>
-      <label style="display:flex;align-items:center;gap:.5rem;margin:.5rem 0">
-        <input type="checkbox" id="toggle-custom-trade-hours"/>
-        <span>Also limit to custom UTC window (intersects with sessions above)</span>
-      </label>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.65rem">
-        <div>
-          <label for="trade-hours-start">Start (UTC)</label>
-          <input id="trade-hours-start" type="time" value="12:00"/>
-        </div>
-        <div>
-          <label for="trade-hours-end">End (UTC)</label>
-          <input id="trade-hours-end" type="time" value="21:00"/>
-        </div>
-      </div>
-      <button class="btn btn-primary" id="btn-save-trade-hours" style="width:100%;margin-top:.65rem">Save trading hours</button>
-      <h3 style="font-size:.75rem;margin:1rem 0 .35rem;color:var(--dim)">Best win hours (14d · cTrader)</h3>
-      <div id="hour-performance-stats"><p class="hint">Run trades or AI scan to populate.</p></div>
     </section>
 
     <section class="card" id="ctrader-card">
