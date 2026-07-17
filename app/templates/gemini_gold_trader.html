@@ -113,6 +113,13 @@
     .block-reason { color: #f5a8a8; font-size: .68rem; margin-top: .2rem; }
     .ctrader-ok { color: var(--profit); }
     .ctrader-bad { color: #ffb4b4; }
+    .conf-row { display: flex; align-items: center; gap: .5rem; margin: .25rem 0 .15rem; }
+    .conf-bar { flex: 1; height: 6px; background: #0e1118; border-radius: 999px; overflow: hidden; border: 1px solid var(--border); }
+    .conf-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, #5B9DFF, #3DAA6E); }
+    .conf-fill.mid { background: linear-gradient(90deg, #c9a227, #5B9DFF); }
+    .conf-fill.low { background: linear-gradient(90deg, #8B929E, #c9a227); }
+    .conf-pct { font-family: var(--font-mono); font-size: .68rem; min-width: 2.5rem; text-align: right; }
+    .conf-tier { font-size: .6rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
   </style>
 </head>
 <body>
@@ -928,8 +935,28 @@ async function loadCtraderAccount() {
   renderCtraderAccount(j.account);
 }
 
+function confTier(pct) {
+  if (pct >= 86) return 'A+';
+  if (pct >= 78) return 'A';
+  if (pct >= 65) return 'B+';
+  if (pct >= 50) return 'C';
+  return '—';
+}
+
+function confBarHtml(conf, threshold) {
+  const pct = Math.min(100, Math.max(0, Number(conf) || 0));
+  const fillCls = pct >= 86 ? '' : (pct >= 65 ? ' mid' : ' low');
+  const tier = confTier(pct);
+  const thr = threshold != null ? ` · min ${threshold}%` : '';
+  return `<div class="conf-row">
+    <div class="conf-bar"><div class="conf-fill${fillCls}" style="width:${pct}%"></div></div>
+    <span class="conf-pct">${pct}%</span>
+  </div><div class="conf-tier">${tier}${thr}</div>`;
+}
+
 function renderFeed(j) {
   const feed = j.decision_feed || [];
+  const threshold = (j.config || {}).confidence_threshold;
   const el = document.getElementById('feed');
   if (!feed.length) {
     el.innerHTML = '<p class="hint">No Gemini decisions yet.</p>';
@@ -953,8 +980,9 @@ function renderFeed(j) {
       ? `<div class="hint" style="margin-top:4px;opacity:0.85"><strong>See:</strong> ${escapeHtml(d.chart_observation)}</div>`
       : '';
     return `<div class="feed-item">
-      <div class="feed-meta">${fmtTime(d.ts)} · ${fmtSession(d.session)} · ${d.confidence ?? 0}% ${flags ? '· ' + flags : ''}</div>
-      <div class="${cls}">${action} ${d.direction || ''}${setup}${prices}${mirrorPill(d)}</div>
+      <div class="feed-meta">${fmtTime(d.ts)} · ${fmtSession(d.session)}${setup} ${flags ? '· ' + flags : ''}</div>
+      ${confBarHtml(d.confidence, threshold)}
+      <div class="${cls}">${action} ${d.direction || ''}${prices}${mirrorPill(d)}</div>
       ${block}
       ${result}
       ${obs}
