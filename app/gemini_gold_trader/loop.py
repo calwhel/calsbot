@@ -551,6 +551,17 @@ async def run_gemini_gold_trader_loop() -> None:
     if review_lesson:
         chart_meta["review_lesson_applied"] = True
 
+    from app.gemini_gold_trader.confidence_scoring import compute_chart_confluence
+
+    confluence_checklist = compute_chart_confluence(
+        bars_5m=bars_5m,
+        bars_15m=bars_15m,
+        bars_1h=bars_1h,
+        spot=spot,
+        session=session,
+    )
+    chart_meta["confluence"] = confluence_checklist
+
     decision, tokens_in, tokens_out, cost_usd, api_error = await decide_from_charts(
         cfg=cfg,
         session=session,
@@ -568,6 +579,7 @@ async def run_gemini_gold_trader_loop() -> None:
         zone_summary=zone_summary,
         chart_observation=observation_text,
         review_lesson=review_lesson,
+        confluence_checklist=confluence_checklist,
     )
 
     tokens_in += observe_tokens_in

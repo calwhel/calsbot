@@ -8,6 +8,11 @@ from typing import Any, Dict, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
+from app.gemini_gold_trader.confidence_scoring import (
+    calibrate_confidence,
+    confidence_scoring_prompt_block,
+    format_confluence_block,
+)
 from app.gemini_gold_trader.chart_renderer import summarize_bars_for_prompt
 from app.gemini_gold_trader.config import GeminiGoldRuntimeConfig, SYMBOL
 from app.gemini_gold_trader.setup_types import (
@@ -108,8 +113,8 @@ def _early_opportunity_guidance() -> str:
         "not a distant HTF target.\n"
         "- Fade setup_type: liquidity_grab_short/long, liq_sweep_bear/bull, "
         "eqh_sweep_bear, eql_sweep_bull, sdp_bear/sdp_bull, disp_bear/disp_bull.\n"
-        "- Proactive beats perfect: clear extension + live 5m flip = TAKE at 75–85%. "
-        "Waiting for more confirmation often misses the scalp.\n"
+        "- Proactive beats perfect: clear extension + live 5m flip = TAKE at 78–88%. "
+        "Exceptional fades with reclaim + displacement = 86–94%.\n"
     )
 
 
@@ -264,6 +269,8 @@ def _build_prompt(
     max_sl_pips: float = 150.0,
     chart_observation: Optional[str] = None,
     review_lesson: Optional[str] = None,
+    confluence_checklist: Optional[Dict[str, bool]] = None,
+    confidence_threshold: int = 85,
 ) -> str:
     entry_label = "1-minute" if entry_timeframe == "1m" else "5-minute (1m unavailable)"
     entry_note = (
@@ -326,6 +333,13 @@ def _build_prompt(
         "- Entry near current price — no \"limit at distant OB\" scalps; if price isn't "
         "there now with a 5m trigger, SKIP.\n"
         f"- If the setup cannot fit {sl_range} pip SL with 1–2R TP at current price, SKIP.\n\n"
+        f"{confidence_scoring_prompt_block(confidence_threshold=confidence_threshold)}\n\n"
+    )
+    if confluence_checklist:
+        prompt += (
+            f"{format_confluence_block(confluence_checklist, confidence_threshold=confidence_threshold)}\n\n"
+        )
+    prompt += (
         f"Session: {session}. Spot reference: {spot:.2f}.\n\n"
         "PRICE ANCHORING (mandatory):\n"
         "- Chart prices and spot reference are ground truth.\n"
@@ -409,7 +423,12 @@ def _normalize_observation(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _normalize_decision(raw: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_decision(
+    raw: Dict[str, Any],
+    *,
+    confluence_checklist: Optional[Dict[str, bool]] = None,
+    confidence_threshold: int = 85,
+) -> Dict[str, Any]:
     action = str(raw.get("action") or "SKIP").strip().upper()
     if action not in ("TAKE", "SKIP"):
         action = "SKIP"
@@ -444,7 +463,7 @@ def _normalize_decision(raw: Dict[str, Any]) -> Dict[str, Any]:
         except (TypeError, ValueError):
             return None
 
-    return {
+    out = {
         "action": action,
         "setup_type": setup_type,
         "direction": direction,
@@ -459,6 +478,16 @@ def _normalize_decision(raw: Dict[str, Any]) -> Dict[str, Any]:
         "rationale": str(raw.get("rationale") or "").strip(),
         "symbol": SYMBOL,
     }
+    calibrated, meta = calibrate_confidence(
+        out,
+        checklist=confluence_checklist or {},
+        confidence_threshold=confidence_threshold,
+    )
+    out["confidence"] = calibrated
+    if meta.get("calibrated"):
+        out["confidence_model"] = meta.get("model_confidence")
+    out["confidence_meta"] = meta
+    return out
 
 
 def _build_ohlc_context(
@@ -689,6 +718,7 @@ async def decide_from_charts(
     zone_summary: Optional[str] = None,
     chart_observation: Optional[str] = None,
     review_lesson: Optional[str] = None,
+    confluence_checklist: Optional[Dict[str, bool]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], int, int, float, Optional[str]]:
     """
     Step 2 (or single-step): TAKE/SKIP decision from chart images.
@@ -713,6 +743,8 @@ async def decide_from_charts(
         max_sl_pips=cfg.max_sl_pips,
         chart_observation=chart_observation,
         review_lesson=review_lesson,
+        confluence_checklist=confluence_checklist,
+        confidence_threshold=cfg.confidence_threshold,
     )
     ohlc_block = _build_ohlc_context(
         entry_bars=entry_bars,
@@ -747,7 +779,11 @@ async def decide_from_charts(
     )
     if err or not raw:
         return None, tokens_in, tokens_out, cost, err or "no_decision"
-    return _normalize_decision(raw), tokens_in, tokens_out, cost, None
+    return _normalize_decision(
+        raw,
+        confluence_checklist=confluence_checklist,
+        confidence_threshold=cfg.confidence_threshold,
+    ), tokens_in, tokens_out, cost, None
 
 
 async def decide_orb_text(
@@ -805,4 +841,8 @@ async def decide_orb_text(
             raw = json.loads(text)
         except json.JSONDecodeError:
             return None, tokens_in, tokens_out, cost, "invalid_json"
-    return _normalize_decision(raw), tokens_in, tokens_out, cost, None
+    return _normalize_decision(
+        raw,
+        confluence_checklist=None,
+        confidence_threshold=confidence_threshold,
+    ), tokens_in, tokens_out, cost, None
