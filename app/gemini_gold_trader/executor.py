@@ -35,13 +35,16 @@ def _parse_direction(decision: Dict[str, Any]) -> Optional[str]:
 
 
 def _parse_prices(decision: Dict[str, Any]) -> Optional[Tuple[str, float, float, float]]:
-    direction = _parse_direction(decision)
+    from app.gemini_gold_trader.trade_invert import invert_take_decision
+
+    d = invert_take_decision(decision)
+    direction = _parse_direction(d)
     if not direction:
         return None
     try:
-        entry = float(decision.get("entry") or 0)
-        sl = float(decision.get("stop_loss") or 0)
-        tp = float(decision.get("take_profit") or 0)
+        entry = float(d.get("entry") or 0)
+        sl = float(d.get("stop_loss") or 0)
+        tp = float(d.get("take_profit") or 0)
     except (TypeError, ValueError):
         return None
     if entry <= 0 or sl <= 0 or tp <= 0:

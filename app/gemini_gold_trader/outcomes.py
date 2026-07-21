@@ -104,10 +104,14 @@ def record_outcome_from_execution(db, decision_id: int, execution) -> bool:
         return False
 
     dec = db.query(GeminiGoldDecision).filter(GeminiGoldDecision.id == decision_id).first()
-    d = (dec.decision or {}) if dec else {}
-    entry = float(d.get("entry") or execution.entry_price or 0)
-    sl = float(d.get("stop_loss") or execution.sl_price or 0)
-    direction = (d.get("direction") or execution.direction or "long").upper()
+    entry = float(execution.entry_price or 0)
+    sl = float(execution.sl_price or 0)
+    direction = (execution.direction or "long").upper()
+    if entry <= 0 or sl <= 0:
+        d = (dec.decision or {}) if dec else {}
+        entry = float(d.get("entry") or entry or 0)
+        sl = float(d.get("stop_loss") or sl or 0)
+        direction = (d.get("direction") or direction or "long").upper()
 
     result = "breakeven"
     if execution.outcome == "WIN":
