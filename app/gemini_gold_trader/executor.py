@@ -428,7 +428,7 @@ async def maybe_live_mirror_after_demo(
         demo_execution_id=demo_execution_id,
     )
     if live_exec_id:
-        _update(live_exec_id=live_exec_id, status="pending")
+        _update(live_exec_id=live_exec_id, status="filled")
         await db_commit(db)
         try:
             from app.gemini_gold_trader.telegram_notify import notify_live_mirror_filled
@@ -451,7 +451,7 @@ async def maybe_live_mirror_after_demo(
         _update(
             live_exec_id=None,
             status="failed",
-            error="live mirror enqueue rejected",
+            error="live mirror order rejected",
         )
         await db_commit(db)
 
@@ -476,14 +476,21 @@ async def execute_live_mirror_take(
     decision_id: int,
     demo_execution_id: int,
 ) -> Optional[int]:
-    """Queue live mirror order after a successful demo TAKE."""
+    """Place a live market order mirroring a successful demo TAKE.
+
+    Places directly via place_market_order_resilient (same path as demo).
+    The shared CtraderOrderJob queue is gated on the main executor advisory
+    lock, which the standalone gemini_gold_runner never holds — so queue-based
+    live mirror always failed with "executor lock unconfirmed".
+    """
     if not cfg.live_mirror_enabled or not cfg.demo_user_id:
         return None
     if is_live_execution_mode(cfg):
         return None
 
+    from app.services.ctrader_client import place_market_order_resilient
+    from app.services.order_latency import new_order_latency
     from app.strategy_models import StrategyExecution
-    from app.services.ctrader_order_queue import CtraderOrderJob, enqueue_ctrader_order
 
     user, prefs = await run_in_db_thread(_resolve_live_mirror_trader, db, cfg)
     if not user:
@@ -506,18 +513,96 @@ async def execute_live_mirror_take(
     if not parsed:
         return None
     direction, entry, sl, tp = parsed
-    sl_pct, tp_pct = _pct_from_prices(direction, entry, sl, tp)
-    lots = max(0.01, float(cfg.live_lot_size or 0.01))
 
+    # Prefer the demo fill as the signal price so relative SL/TP match what
+    # just filled on demo (avoids entry drift vs chart mid).
+    def _load_demo_ex(db_sess):
+        return (
+            db_sess.query(StrategyExecution)
+            .filter(StrategyExecution.id == int(demo_execution_id))
+            .first()
+        )
+
+    demo_ex = await run_in_db_thread(_load_demo_ex, db)
+    if demo_ex and demo_ex.entry_price:
+        try:
+            entry = float(demo_ex.entry_price)
+        except (TypeError, ValueError):
+            pass
+
+    lots = max(0.01, float(cfg.live_lot_size or 0.01))
     strategy_id = await run_in_db_thread(
         ensure_system_strategy, db, user.id, live_mirror=True
     )
+
+    latency = new_order_latency(decision_id, signal_mono=time.monotonic())
+    latency.mark_queued()
+    latency.mark_dequeue()
+    result = await place_market_order_resilient(
+        user_id=user.id,
+        access_token=prefs.ctrader_access_token,
+        ctid=ctid,
+        prefs=prefs,
+        symbol_name=SYMBOL,
+        direction=direction,
+        volume_lots=lots,
+        stop_loss_price=sl,
+        take_profit_price=tp,
+        entry_price=entry,
+        label="GeminiGoldLiveMirror",
+        latency=latency,
+        execution_id=decision_id,
+    )
+    try:
+        latency.log_summary(outcome="fill" if result and result.get("actual_fill") else "fail")
+    except Exception:
+        pass
+
+    if not result or not result.get("actual_fill"):
+        broker_err = (result or {}).get("error")
+        logger.warning(
+            "[gemini-gold] live mirror order failed decision=%s demo_exec=%s err=%s",
+            decision_id,
+            demo_execution_id,
+            broker_err,
+        )
+        return None
+
+    position_id = result.get("position_id")
+    if not position_id or not str(position_id).strip():
+        logger.warning(
+            "[gemini-gold] live mirror fill missing position_id decision=%s order_id=%s",
+            decision_id,
+            result.get("order_id"),
+        )
+        return None
+
+    fill = float(result["actual_fill"])
+    broker_units = result.get("volume")
+    broker_units_i: Optional[int] = None
+    try:
+        if broker_units is not None:
+            broker_units_i = int(broker_units)
+    except Exception:
+        broker_units_i = None
+
+    note = (
+        f"gemini_gold_trader_live_mirror decision_id={decision_id} "
+        f"demo_exec={demo_execution_id}"
+    )
+    order_id = result.get("order_id")
+    if order_id:
+        note += f" | ord={order_id}"
+    note += f" | pos={position_id}"
+    if broker_units_i and broker_units_i > 0:
+        note += f" | vol={broker_units_i}"
+
     ex = StrategyExecution(
         strategy_id=strategy_id,
         user_id=user.id,
         symbol=SYMBOL,
         direction=direction,
-        entry_price=entry,
+        entry_price=fill,
         tp_price=tp,
         sl_price=sl,
         current_sl=sl,
@@ -526,10 +611,11 @@ async def execute_live_mirror_take(
         is_paper=False,
         asset_class=ASSET_CLASS,
         ctrader_account_id=str(ctid),
-        notes=(
-            f"gemini_gold_trader_live_mirror decision_id={decision_id} "
-            f"demo_exec={demo_execution_id}"
-        ),
+        ctrader_order_id=str(order_id or ""),
+        ctrader_position_id=str(position_id),
+        broker_volume_units=broker_units_i,
+        remaining_volume=float(broker_units_i) if broker_units_i and broker_units_i > 0 else None,
+        notes=note,
         conditions_met={
             "gemini_gold_decision_id": decision_id,
             "gemini_gold_live_mirror": True,
@@ -539,40 +625,13 @@ async def execute_live_mirror_take(
     db.add(ex)
     await db_commit(db)
     await run_in_db_thread(db.refresh, ex)
-
-    job = CtraderOrderJob(
-        user_id=user.id,
-        strategy_id=strategy_id,
-        execution_id=ex.id,
-        symbol=SYMBOL,
-        direction=direction,
-        entry_price=entry,
-        tp_pct=tp_pct,
-        sl_pct=sl_pct,
-        fixed_lots=lots,
-        asset_class=ASSET_CLASS,
-        ctrader_account_id=str(ctid),
-        signal_mono=time.monotonic(),
-        signal_generated_at=time.time(),
-        signal_price_source="gemini_gold_trader",
-    )
-    ok = await enqueue_ctrader_order(job)
-    if not ok:
-        ex.notes = (ex.notes or "") + " | enqueue_failed"
-        ex.outcome = "CANCELLED"
-        ex.closed_at = datetime.utcnow()
-        await db_commit(db)
-        logger.warning("[gemini-gold] live mirror enqueue failed exec=%s", ex.id)
-        # Return None so callers mark live_mirror_status=failed and do not
-        # leave a phantom OPEN that blocks max_live_open_position.
-        return None
-
     logger.info(
-        "[gemini-gold] LIVE MIRROR queued exec=%s ctid=%s %s %s lots=%s decision=%s",
+        "[gemini-gold] LIVE MIRROR filled exec=%s ctid=%s %s %s @ %s lots=%s decision=%s",
         ex.id,
         ctid,
         direction,
         SYMBOL,
+        fill,
         lots,
         decision_id,
     )

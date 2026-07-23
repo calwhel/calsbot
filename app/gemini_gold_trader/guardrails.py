@@ -340,11 +340,17 @@ def open_position_count(
 
 
 def live_trades_today(db) -> int:
+    """Count live-mirror fills today (not failed/skipped enqueue attempts)."""
     return (
         db.query(func.count(GeminiGoldDecision.id))
         .filter(
             GeminiGoldDecision.ts >= _today_start(),
             GeminiGoldDecision.live_mirror_execution_id.isnot(None),
+            or_(
+                GeminiGoldDecision.live_mirror_status == "filled",
+                GeminiGoldDecision.live_mirror_status == "pending",
+                GeminiGoldDecision.live_mirror_status.is_(None),
+            ),
         )
         .scalar()
         or 0
