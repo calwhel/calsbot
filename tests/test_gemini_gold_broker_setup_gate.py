@@ -203,6 +203,65 @@ def test_broker_preflight_falls_back_to_cache_on_timeout():
     asyncio.run(_run())
 
 
+def test_broker_preflight_reuses_cache_on_auth_cooldown():
+    """A transient auth cooldown must not drop a trade when a recent snapshot exists."""
+    import time as _t
+
+    from app.gemini_gold_trader.broker_preflight import broker_reachable_for_execution
+
+    cfg = _exec_cfg()
+    db = MagicMock()
+    prefs = MagicMock()
+    prefs.ctrader_access_token = "tok"
+    db.query.return_value.filter.return_value.first.return_value = prefs
+    poll = AsyncMock(return_value={"position_ids": None, "auth_cooldown_s": 15})
+
+    async def _run():
+        with patch(
+            "app.services.ctrader_client.get_broker_positions_snapshot_resilient",
+            new=poll,
+        ):
+            ok, reason, snap = await broker_reachable_for_execution(
+                db,
+                cfg,
+                user_id=5,
+                cached_snapshot={"position_ids": {9}},
+                cached_at=_t.monotonic() - 60,
+                lightweight=True,
+            )
+        assert ok is True
+        assert reason == "ok_cached_after_poll_error"
+        assert snap == {"position_ids": {9}}
+        poll.assert_awaited_once()
+
+    asyncio.run(_run())
+
+
+def test_broker_preflight_auth_cooldown_blocks_without_cache():
+    """Without a reusable snapshot, an auth cooldown still blocks execution."""
+    from app.gemini_gold_trader.broker_preflight import broker_reachable_for_execution
+
+    cfg = _exec_cfg()
+    db = MagicMock()
+    prefs = MagicMock()
+    prefs.ctrader_access_token = "tok"
+    db.query.return_value.filter.return_value.first.return_value = prefs
+    poll = AsyncMock(return_value={"position_ids": None, "auth_cooldown_s": 15})
+
+    async def _run():
+        with patch(
+            "app.services.ctrader_client.get_broker_positions_snapshot_resilient",
+            new=poll,
+        ):
+            ok, reason, snap = await broker_reachable_for_execution(
+                db, cfg, user_id=5, lightweight=True
+            )
+        assert ok is False
+        assert reason == "auth_cooldown:15s"
+
+    asyncio.run(_run())
+
+
 def test_broker_preflight_lightweight_uses_positions_poll():
     """lightweight=True calls the positions-only poll, not the full reconcile."""
     from app.gemini_gold_trader.broker_preflight import broker_reachable_for_execution
