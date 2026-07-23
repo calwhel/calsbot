@@ -487,6 +487,15 @@ def resolve_live_mirror_status(execution) -> tuple[str, Optional[str]]:
 
 
 def check_can_execute_live_mirror(db, cfg: GeminiGoldRuntimeConfig, user_id: int) -> Tuple[bool, str]:
+    """Gate the live mirror.
+
+    The live account is a pure 1:1 mirror of the demo side: if a demo TAKE
+    fired, the live order must fire too. The demo path already enforced the
+    trade-frequency and open-position caps, so re-applying independent caps
+    here only makes the live account silently diverge from demo (demo fires,
+    live doesn't). We therefore check hard preconditions ONLY — never
+    trade/position caps.
+    """
     if cfg.kill_switch:
         return False, "kill_switch"
     if is_live_execution_mode(cfg):
@@ -497,14 +506,6 @@ def check_can_execute_live_mirror(db, cfg: GeminiGoldRuntimeConfig, user_id: int
         return False, "dry_run"
     if not live_account_configured(cfg):
         return False, "live_account_not_configured"
-    try:
-        clear_stale_live_mirror_phantoms(db, user_id)
-    except Exception as exc:
-        logger.warning("[gemini-gold] live mirror phantom clear before check failed: %s", exc)
-    if live_trades_today(db) >= cfg.max_live_trades_day:
-        return False, "max_live_trades_day"
-    if live_open_position_count(db, user_id) >= 1:
-        return False, "max_live_open_position"
     return True, "ok"
 
 

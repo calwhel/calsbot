@@ -176,6 +176,27 @@ def test_check_can_execute_live_mirror_blocks_dry_run():
     assert reason == "dry_run"
 
 
+def test_check_can_execute_live_mirror_ignores_trade_and_position_caps(monkeypatch):
+    """Live mirror is a pure 1:1 copy of demo — trade/open-position caps must
+    NOT block it (that would silently diverge the live account from demo)."""
+    import app.gemini_gold_trader.guardrails as g
+
+    db = MagicMock()
+    cfg = _cfg()
+    cfg.live_mirror_enabled = True
+    cfg.live_ctrader_account_id = "67890"
+    cfg.max_live_trades_day = 1
+
+    # Simulate a live position already open and the daily cap already reached —
+    # neither should block the mirror.
+    monkeypatch.setattr(g, "live_open_position_count", lambda *a, **k: 5)
+    monkeypatch.setattr(g, "live_trades_today", lambda *a, **k: 99)
+
+    ok, reason = check_can_execute_live_mirror(db, cfg, 42)
+    assert ok is True
+    assert reason == "ok"
+
+
 def test_assert_live_account_allows_configured_ctid_when_islive_unknown():
     class _PrefsUnknown:
         ctrader_accounts = '[{"ctidTraderAccountId": 67890}]'
