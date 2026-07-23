@@ -160,6 +160,9 @@ def test_get_chart_klines_skips_tradfi_when_trendbars_blocked():
             new_callable=AsyncMock,
             return_value=([], ""),
         ), patch(
+            "app.gemini_gold_trader.klines._synthesize_forming_bar",
+            side_effect=lambda bars, *a, **k: bars,
+        ), patch(
             "app.services.kline_snapshot_store.get_klines",
             return_value=snap,
         ), patch(
