@@ -143,6 +143,81 @@ def _demo_cfg():
     )
 
 
+def test_live_mirror_sizes_by_lots_not_demo_wire_volume():
+    """Regression: the live mirror must size by LOTS (volume_lots), never by the
+    demo's raw broker wire volume. demo_ex.broker_volume_units is lots × lotSize
+    on the demo spec; passing it as volume_units (contracts) blew the live order
+    up ~2000x → NOT_ENOUGH_MONEY."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    from app.gemini_gold_trader import executor
+
+    db = MagicMock()
+    user = MagicMock(id=42)
+    prefs = MagicMock(ctrader_access_token="tok")
+    demo_ex = MagicMock(
+        direction="SHORT",
+        sl_price=4055.0,
+        tp_price=4043.0,
+        broker_volume_units=100,  # demo wire volume (0.01 lot × lotSize 10000)
+    )
+    place = AsyncMock(
+        return_value={
+            "actual_fill": 4049.0,
+            "position_id": "555",
+            "order_id": "777",
+            "volume": 100,
+        }
+    )
+
+    cfg = _demo_cfg()
+    cfg = cfg.__class__(**{**cfg.__dict__, "live_lot_size": 0.01, "demo_lot_size": 0.01})
+
+    async def _run():
+        async def _in_db(fn, *a, **k):
+            # execute_live_mirror_take calls run_in_db_thread with, in order:
+            # _resolve_live_mirror_trader, a nested _load_demo_ex closure, and
+            # ensure_system_strategy. Route the two module-level callables and
+            # default the nested demo-load closure to the mocked demo execution.
+            if fn is executor._resolve_live_mirror_trader:
+                return user, prefs
+            if fn is executor.ensure_system_strategy:
+                return 7
+            return demo_ex
+
+        with patch.object(
+            executor, "run_in_db_thread", side_effect=_in_db
+        ), patch.object(
+            executor, "is_live_execution_mode", return_value=False
+        ), patch.object(
+            executor, "assert_live_account", return_value=None
+        ), patch(
+            "app.services.ctrader_client.place_market_order_resilient", new=place
+        ), patch.object(
+            executor, "db_commit", new=AsyncMock()
+        ):
+            await executor.execute_live_mirror_take(
+                db=db,
+                cfg=cfg,
+                decision={
+                    "direction": "SHORT",
+                    "entry": 4049.0,
+                    "stop_loss": 4055.0,
+                    "take_profit": 4043.0,
+                    "confidence": 80,
+                },
+                decision_id=1801,
+                demo_execution_id=11,
+            )
+        place.assert_awaited_once()
+        kwargs = place.await_args.kwargs
+        assert kwargs.get("volume_lots") == 0.01
+        assert "volume_units" not in kwargs
+
+    asyncio.run(_run())
+
+
 def test_live_mirror_skip_sends_telegram_reason():
     """A blocked live mirror (enabled) must surface the reason on Telegram."""
     import asyncio
