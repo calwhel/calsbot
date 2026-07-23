@@ -181,6 +181,35 @@ def test_get_chart_klines_skips_tradfi_when_trendbars_blocked():
     asyncio.run(_run())
 
 
+def test_fetch_ctrader_chart_klines_uses_cache_when_trendbars_blocked():
+    """During a trendbar block, the direct cTrader path still calls
+    ctf.get_klines — which safely returns the in-memory tick cache / postgres
+    snapshot — instead of bailing out to ctrader_unavailable."""
+    from app.gemini_gold_trader import klines as gk
+
+    rows = _bars(30)
+    ctf_get = AsyncMock(return_value=rows)
+
+    async def _run():
+        with patch(
+            "app.services.ctrader_price_feed.trendbar_fetch_blocked_reason",
+            return_value="stream timeout XAUUSD 5m, retry in 20s",
+        ), patch(
+            "app.services.ctrader_price_feed.get_klines",
+            new=ctf_get,
+        ), patch.object(
+            gk, "_synthesize_forming_bar", side_effect=lambda bars, *a, **k: bars
+        ), patch.object(
+            gk, "_bars_fresh", return_value=True
+        ):
+            out, label = await gk._fetch_ctrader_chart_klines("5m", 80)
+        assert len(out) == 30
+        assert label == "ctrader"
+        ctf_get.assert_awaited()
+
+    asyncio.run(_run())
+
+
 def test_charts_are_ctrader_flags_non_ctrader_source():
     from app.gemini_gold_trader.klines import charts_are_ctrader
 

@@ -62,12 +62,13 @@ async def _fetch_ctrader_chart_klines(
         try:
             from app.services import ctrader_price_feed as ctf
 
-            block = ctf.trendbar_fetch_blocked_reason()
-            if block:
-                if attempt < attempts:
-                    await asyncio.sleep(delay_s)
-                    continue
-                return [], ""
+            # ctf.get_klines is safe to call even while trendbar fetch is blocked:
+            # it returns the in-memory tick-built cache (rolled forward from live
+            # spot) or the shared Postgres cTrader snapshot without ever touching
+            # external tradfi providers. Short-circuiting on the block reason here
+            # (as we used to) skipped that fresh in-process cache and forced a
+            # ``ctrader_unavailable`` data-gate block whenever a transient trendbar
+            # backoff was active — even though live ticks were flowing.
             rows = await ctf.get_klines(
                 SYMBOL,
                 ASSET_CLASS,

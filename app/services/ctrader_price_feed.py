@@ -147,6 +147,18 @@ _kline_cache: Dict[Tuple[str, str, int], Tuple[List[List[float]], float]] = {}
 _KLINE_TTL = 60.0
 # canonical symbol → monotonic ts of last successful trendbar fetch
 _last_kline_update: Dict[str, float] = {}
+# (symbol, timeframe) → monotonic ts of last peer (Postgres) snapshot persist from
+# tick-rolled bars. Throttles cross-worker persistence so the shared snapshot stays
+# fresh for non-feed processes (portal workers, standalone runners) even while the
+# historical trendbar fetch is on backoff — as long as live ticks keep flowing.
+_last_peer_persist: Dict[Tuple[str, str], float] = {}
+
+
+def _peer_persist_interval_s() -> float:
+    try:
+        return max(5.0, float(os.environ.get("CTRADER_TICK_SNAPSHOT_PERSIST_S", "20")))
+    except (TypeError, ValueError):
+        return 20.0
 
 # ── Persistent trendbar (candle) connection ──────────────────────────────────
 # A SINGLE authed connection reused across all trendbar fetches, serialized by a
@@ -660,6 +672,8 @@ def _update_kline_cache_on_tick(sym: str, mid: float, ts_ms: Optional[int] = Non
         ts_ms = int(time.time() * 1000)
     now_mono = time.monotonic()
     updated = False
+    persist_interval = _peer_persist_interval_s()
+    persisted_tfs: set = set()
     for key in list(_kline_cache.keys()):
         if key[0] != sym_up:
             continue
@@ -670,6 +684,17 @@ def _update_kline_cache_on_tick(sym: str, mid: float, ts_ms: Optional[int] = Non
         new_rows = _apply_tick_to_bar_rows(rows, mid, ts_ms, tf, lim)
         _kline_cache[key] = (new_rows, now_mono)
         updated = True
+
+        # Keep the shared Postgres snapshot fresh for non-feed peers even while
+        # the historical trendbar fetch is blocked. Throttled per timeframe so we
+        # persist at most once per interval regardless of the cached limit variant.
+        if tf in persisted_tfs:
+            continue
+        pk = (sym_up, tf)
+        if now_mono - _last_peer_persist.get(pk, 0.0) >= persist_interval:
+            _last_peer_persist[pk] = now_mono
+            persisted_tfs.add(tf)
+            _persist_klines_for_peers(sym_up, tf, new_rows)
     if updated:
         _last_kline_update[sym_up] = now_mono
 
