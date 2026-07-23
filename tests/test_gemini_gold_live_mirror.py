@@ -126,3 +126,58 @@ def test_disconnect_live_mirror(api_client):
     assert row.live_mirror_enabled is False
     assert row.live_mirror_confirmed_at is None
     check.close()
+
+
+def _demo_cfg():
+    from app.gemini_gold_trader.config import env_defaults
+
+    cfg = env_defaults()
+    return cfg.__class__(
+        **{
+            **cfg.__dict__,
+            "execution_mode": EXECUTION_MODE_DEMO,
+            "live_mirror_enabled": True,
+            "demo_user_id": 42,
+            "live_ctrader_account_id": "222",
+        }
+    )
+
+
+def test_live_mirror_skip_sends_telegram_reason():
+    """A blocked live mirror (enabled) must surface the reason on Telegram."""
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    from app.gemini_gold_trader import executor
+
+    db = MagicMock()
+    notify = AsyncMock()
+
+    async def _run():
+        with patch.object(
+            executor, "is_live_execution_mode", return_value=False
+        ), patch(
+            "app.gemini_gold_trader.guardrails.check_can_execute_live_mirror",
+            return_value=(False, "max_live_open_position"),
+        ), patch.object(
+            executor, "db_commit", new=AsyncMock()
+        ), patch(
+            "app.gemini_gold_trader.telegram_notify.notify_live_mirror_skipped",
+            new=notify,
+        ), patch.object(
+            executor, "execute_live_mirror_take", new=AsyncMock(return_value=None)
+        ):
+            await executor.maybe_live_mirror_after_demo(
+                db=db,
+                cfg=_demo_cfg(),
+                decision={"direction": "LONG", "confidence": 80},
+                decision_id=99,
+                demo_execution_id=10,
+                session="new_york",
+            )
+        notify.assert_awaited_once()
+        kwargs = notify.await_args.kwargs
+        assert kwargs["reason"] == "max_live_open_position"
+        assert kwargs["status"] == "skipped"
+
+    asyncio.run(_run())

@@ -453,6 +453,29 @@ async def maybe_live_mirror_after_demo(
     if not ok_live:
         _update(live_exec_id=None, status="skipped", error=live_reason)
         await db_commit(db)
+        logger.warning(
+            "[gemini-gold] live mirror skipped decision=%s reason=%s",
+            decision_id,
+            live_reason,
+        )
+        try:
+            from app.gemini_gold_trader.telegram_notify import notify_live_mirror_skipped
+
+            await notify_live_mirror_skipped(
+                session=str(session or decision.get("session") or ""),
+                decision=decision,
+                confidence=int(decision.get("confidence") or 0),
+                decision_id=decision_id,
+                demo_execution_id=demo_execution_id,
+                reason=live_reason,
+                status="skipped",
+            )
+        except Exception as exc:
+            logger.warning(
+                "[gemini-gold] live mirror skip notify failed decision=%s: %s",
+                decision_id,
+                exc,
+            )
         return
 
     live_exec_id = await execute_live_mirror_take(
@@ -489,6 +512,27 @@ async def maybe_live_mirror_after_demo(
             error="live mirror order rejected",
         )
         await db_commit(db)
+        logger.warning(
+            "[gemini-gold] live mirror order rejected decision=%s", decision_id
+        )
+        try:
+            from app.gemini_gold_trader.telegram_notify import notify_live_mirror_skipped
+
+            await notify_live_mirror_skipped(
+                session=str(session or decision.get("session") or ""),
+                decision=decision,
+                confidence=int(decision.get("confidence") or 0),
+                decision_id=decision_id,
+                demo_execution_id=demo_execution_id,
+                reason="live mirror order rejected",
+                status="failed",
+            )
+        except Exception as exc:
+            logger.warning(
+                "[gemini-gold] live mirror fail notify failed decision=%s: %s",
+                decision_id,
+                exc,
+            )
 
 
 def _resolve_live_mirror_trader(db, cfg: GeminiGoldRuntimeConfig):
