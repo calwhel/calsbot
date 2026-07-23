@@ -247,6 +247,25 @@ def klines_ready(
     return all(len(bars) >= mb for bars in (bars_5m, bars_15m, bars_1h))
 
 
+def charts_are_ctrader(*metas: Optional[Dict]) -> Tuple[bool, str]:
+    """Confirm every rendered chart came from a cTrader source before spending
+    a Gemini vision call. Returns (ok, reason) where reason names the offending
+    timeframe/source on failure. Empty/absent metas are ignored (bar-count
+    readiness is enforced separately by ``klines_ready``)."""
+    for meta in metas:
+        if not meta:
+            continue
+        src = (meta.get("source") or "").lower()
+        if not src:
+            continue
+        if int(meta.get("bars") or 0) <= 0:
+            continue
+        if not _is_ctrader_kline_source(src):
+            tf = meta.get("timeframe") or "?"
+            return False, f"non_ctrader_{tf}:{src}"
+    return True, "ok"
+
+
 def has_1m_chart(bars_1m: List, *, min_bars: Optional[int] = None) -> bool:
     mb = min_bars if min_bars is not None else _min_bars()
     return len(bars_1m) >= mb

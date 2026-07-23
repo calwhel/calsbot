@@ -135,7 +135,7 @@ def env_defaults() -> GeminiGoldRuntimeConfig:
         dry_run=gemini_gold_dry_run(),
         max_calls_day=_env_int("GEMINI_GOLD_MAX_CALLS_DAY", 340),
         max_trades_day=_env_int("GEMINI_GOLD_MAX_TRADES_DAY", 4),
-        scan_interval_s=max(60.0, _env_float("GEMINI_GOLD_SCAN_INTERVAL_S", 180.0)),
+        scan_interval_s=max(60.0, _env_float("GEMINI_GOLD_SCAN_INTERVAL_S", 120.0)),
         model=os.environ.get("GEMINI_GOLD_MODEL", "gemini-2.5-flash").strip()
         or "gemini-2.5-flash",
         demo_user_id=demo_uid,

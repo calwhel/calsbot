@@ -36,6 +36,7 @@ from app.gemini_gold_trader.guardrails import (
 )
 from app.gemini_gold_trader.schema import seed_config_if_missing
 from app.gemini_gold_trader.klines import (
+    charts_are_ctrader,
     get_chart_klines,
     has_1m_chart,
     klines_ready,
@@ -326,6 +327,16 @@ async def run_gemini_gold_trader_loop() -> None:
             meta_1h.get("source"),
         )
         runtime_state.note_dormant("stale_klines")
+        runtime_state.set_funnel(funnel_snapshot())
+        return
+
+    src_ok, src_reason = charts_are_ctrader(meta_1m, meta_5m, meta_15m, meta_1h)
+    if not src_ok:
+        logger.info(
+            "[gemini-gold] skipping scan — non-cTrader chart source (%s)", src_reason
+        )
+        await run_with_db(_funnel_db, "data_blocked", reason=src_reason, session=session)
+        runtime_state.note_dormant(src_reason)
         runtime_state.set_funnel(funnel_snapshot())
         return
 
