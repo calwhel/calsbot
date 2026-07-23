@@ -103,7 +103,9 @@ def ensure_system_strategy(
             "gemini_gold_trader": True,
             **config_extra,
         },
-        is_active=True,
+        status="paused",
+        asset_class=ASSET_CLASS,
+        is_public=False,
     )
     db.add(row)
     db.commit()
