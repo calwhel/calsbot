@@ -32,6 +32,7 @@ from app.gemini_gold_trader.guardrails import (
     effective_open_slots_used,
     is_live_execution_mode,
     live_account_configured,
+    live_mirror_readiness,
     live_pnl_today_usd,
     live_trades_today,
     merge_config,
@@ -473,6 +474,11 @@ async def api_status(uid: str = Query(...)):
                 "live_trades": live_trades_today(db),
                 "live_pnl_usd": live_pnl_today_usd(db, int(trader_uid)) if trader_uid else 0.0,
             },
+            "live_mirror_readiness": (
+                live_mirror_readiness(db, cfg, int(trader_uid))
+                if trader_uid
+                else {"ok": False, "reason": "no_trader_user", "enabled": bool(cfg.live_mirror_enabled)}
+            ),
             "decision_feed": _decision_feed(db),
             "closed_trades": closed_trades,
             "funnel": runtime_state.get_status().get("funnel") or funnel_snapshot(),
