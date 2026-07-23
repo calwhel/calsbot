@@ -56,6 +56,14 @@ def test_live_mirror_places_directly_not_via_queue():
     assert 'status="filled"' in EXECUTOR
 
 
+def test_ensure_system_strategy_uses_valid_user_strategy_fields():
+    """Regression: is_active is not a UserStrategy column — crashed after demo
+    fill so StrategyExecution was never saved and live mirror never ran."""
+    assert "is_active" not in EXECUTOR
+    assert 'status="paused"' in EXECUTOR
+    assert "asset_class=ASSET_CLASS" in EXECUTOR or 'asset_class=ASSET_CLASS' in EXECUTOR
+
+
 def test_loop_uses_format_block_reason():
     assert "format_block_reason" in LOOP
     assert "maybe_live_mirror_after_demo" in LOOP
