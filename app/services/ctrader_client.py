@@ -572,6 +572,7 @@ async def _get_persistent_connection(
             return st["reader"], st["writer"]
         await _aclose_writer(st.get("writer"))
         _conns.pop(key, None)
+        _ACCOUNT_AUTH_FRESH.pop(key, None)
 
     _cto = connect_timeout if connect_timeout is not None else ORDER_CONNECT_TIMEOUT_S
 
@@ -596,6 +597,7 @@ def _touch_conn(host: str, ctid: int = 0) -> None:
 
 
 def _invalidate_persistent_connection(host: str = CTRADER_HOST, ctid: int = 0) -> None:
+    _ACCOUNT_AUTH_FRESH.pop(_acct_conn_key(host, ctid), None)
     st = _conns.pop(_acct_conn_key(host, ctid), None)
     if st is not None and st.get("writer") is not None:
         try:
@@ -644,6 +646,58 @@ async def _account_auth(
         timeout=timeout,
     )
     return payload is not None
+
+
+# Account auth is otherwise re-sent on every order (adds seconds to the
+# queued→submitted latency). A ProtoOAAccountAuth stays valid for the life of
+# the socket, so we can skip the RPC when the SAME writer was authed with the
+# SAME token very recently. Keyed by (host, ctid) → (writer_id, token, ts).
+_ACCOUNT_AUTH_FRESH: Dict[Tuple[str, int], Tuple[int, str, float]] = {}
+
+
+def _account_auth_cache_ttl_s() -> float:
+    try:
+        return max(0.0, float(os.environ.get("CTRADER_ACCOUNT_AUTH_CACHE_TTL_S", "30")))
+    except (TypeError, ValueError):
+        return 30.0
+
+
+def _clear_account_auth_fresh(host: str, ctid: int) -> None:
+    _ACCOUNT_AUTH_FRESH.pop(_acct_conn_key(host, ctid), None)
+
+
+async def _account_auth_cached(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    access_token: str,
+    ctid_trader_account_id: int,
+    host: str,
+    *,
+    timeout: float = CTRADER_ACCOUNT_AUTH_TIMEOUT_S,
+) -> bool:
+    """Authenticate the account, skipping the RPC when this exact socket was
+    authed with the same token within the cache TTL. Falls back to a real auth
+    (and records success) on any miss."""
+    key = _acct_conn_key(host, ctid_trader_account_id)
+    ttl = _account_auth_cache_ttl_s()
+    if ttl > 0:
+        cached = _ACCOUNT_AUTH_FRESH.get(key)
+        if cached:
+            w_id, tok, ts = cached
+            if (
+                w_id == id(writer)
+                and tok == (access_token or "")
+                and (time.monotonic() - ts) <= ttl
+            ):
+                return True
+    ok = await _account_auth(
+        reader, writer, access_token, ctid_trader_account_id, timeout=timeout,
+    )
+    if ok:
+        _ACCOUNT_AUTH_FRESH[key] = (id(writer), access_token or "", time.monotonic())
+    else:
+        _ACCOUNT_AUTH_FRESH.pop(key, None)
+    return ok
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -1713,6 +1767,63 @@ def _log_order_route(
     )
 
 
+async def warm_order_path(
+    *,
+    user_id: Optional[int],
+    access_token: str,
+    ctid: int,
+    prefs,
+    symbol_name: str,
+) -> bool:
+    """Best-effort pre-warm of the order path so the next order submits without
+    paying cold connect + account-auth + symbol-resolution latency.
+
+    Opens/reuses the persistent socket for the primary routing host, authenticates
+    (recording auth freshness so the order can skip the RPC), and resolves +
+    caches the symbol id/details. Never raises — returns True on success.
+    """
+    if not _PROTO_OK:
+        return False
+    try:
+        at = (access_token or "").strip()
+        if not at:
+            return False
+        if user_id:
+            at = await ensure_ctrader_access_token_for_order(int(user_id), at, prefs=prefs)
+            if not at:
+                return False
+        ctid_i = int(ctid)
+        hosts = _routing_hosts_for_account(prefs, ctid_i) if prefs else [CTRADER_HOST_LIVE]
+        if not hosts:
+            return False
+        host = hosts[0]
+        broker_symbol = _SYMBOL_MAP.get(symbol_name, symbol_name)
+        budget = (
+            CTRADER_ACCOUNT_OP_CONNECT_TIMEOUT_S
+            + CTRADER_ACCOUNT_AUTH_TIMEOUT_S
+            + 8.0
+        )
+        async with asyncio.timeout(budget):
+            async with _get_account_lock(host, ctid_i):
+                reader, writer = await _get_persistent_connection(
+                    host, ctid_i, connect_timeout=CTRADER_ACCOUNT_OP_CONNECT_TIMEOUT_S,
+                )
+                if not await _account_auth_cached(
+                    reader, writer, at, ctid_i, host,
+                    timeout=CTRADER_ACCOUNT_AUTH_TIMEOUT_S,
+                ):
+                    _invalidate_persistent_connection(host, ctid_i)
+                    return False
+                sid = await _resolve_symbol_id(reader, writer, ctid_i, broker_symbol, host)
+                if sid:
+                    await _resolve_symbol_details(reader, writer, ctid_i, sid, host)
+                _touch_conn(host, ctid_i)
+        return True
+    except (asyncio.TimeoutError, Exception) as exc:
+        logger.debug("[cTrader] warm_order_path skipped: %s", exc)
+        return False
+
+
 async def place_market_order_resilient(
     *,
     user_id: Optional[int],
@@ -2000,7 +2111,7 @@ async def place_limit_order(
         for attempt in (1, 2):
             try:
                 reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
-                if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                if not await _account_auth_cached(reader, writer, access_token, ctid_trader_account_id, host):
                     auth_err = _auth_failed_order_result(host, ctid_trader_account_id, attempt)
                     if auth_err is None:
                         continue
@@ -2477,7 +2588,7 @@ async def place_order(
         for attempt in (1, 2):
             try:
                 reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
-                if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                if not await _account_auth_cached(reader, writer, access_token, ctid_trader_account_id, host):
                     auth_err = _auth_failed_order_result(host, ctid_trader_account_id, attempt)
                     if auth_err is None:
                         continue
@@ -2650,7 +2761,7 @@ async def place_order_units(
         for attempt in (1, 2):
             try:
                 reader, writer = await _get_persistent_connection(host, ctid_trader_account_id)
-                if not await _account_auth(reader, writer, access_token, ctid_trader_account_id):
+                if not await _account_auth_cached(reader, writer, access_token, ctid_trader_account_id, host):
                     auth_err = _auth_failed_order_result(host, ctid_trader_account_id, attempt)
                     if auth_err is None:
                         continue

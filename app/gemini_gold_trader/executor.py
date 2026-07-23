@@ -1,6 +1,7 @@
 """Demo and live order execution for Gemini Gold Trader."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from datetime import datetime
@@ -25,6 +26,12 @@ logger = logging.getLogger(__name__)
 GEMINI_GOLD_STRATEGY_NAME_DEMO = "Gemini Gold Trader (Demo)"
 GEMINI_GOLD_STRATEGY_NAME_LIVE = "Gemini Gold Trader (Live)"
 GEMINI_GOLD_STRATEGY_NAME_LIVE_MIRROR = "Gemini Gold Trader (Live Mirror)"
+
+
+def _cancel_warm_task(task) -> None:
+    """Cancel a best-effort order-path warm task so it never leaks."""
+    if task is not None and not task.done():
+        task.cancel()
 
 
 def _parse_direction(decision: Dict[str, Any]) -> Optional[str]:
@@ -250,6 +257,24 @@ async def execute_take_market(
         await _fail_async("blocked: trader_resolution_failed")
         return None
 
+    # Warm the socket + symbol caches in parallel with pre-fire validation so
+    # the order below submits without cold connect/auth/symbol latency.
+    warm_task = None
+    try:
+        from app.services.ctrader_client import warm_order_path
+
+        warm_task = asyncio.create_task(
+            warm_order_path(
+                user_id=user.id,
+                access_token=prefs.ctrader_access_token,
+                ctid=ctid,
+                prefs=prefs,
+                symbol_name=SYMBOL,
+            )
+        )
+    except Exception:
+        warm_task = None
+
     fire_ok, fire_reason, decision = await revalidate_before_fire(
         decision=decision,
         cfg=cfg,
@@ -260,15 +285,23 @@ async def execute_take_market(
     )
     if not fire_ok:
         logger.info("[gemini-gold] fire blocked: %s", fire_reason)
+        _cancel_warm_task(warm_task)
         await _fail_async(fire_reason)
         return None
 
     parsed = _parse_prices(decision)
     if not parsed:
         logger.warning("[gemini-gold] invalid prices entry/sl/tp")
+        _cancel_warm_task(warm_task)
         await _fail_async("blocked: invalid_entry_sl_tp")
         return None
     direction, entry, sl, tp = parsed
+
+    if warm_task is not None:
+        try:
+            await asyncio.wait_for(warm_task, timeout=8.0)
+        except (asyncio.TimeoutError, Exception):
+            _cancel_warm_task(warm_task)
 
     from app.services.ctrader_client import place_market_order_resilient
     from app.services.order_latency import new_order_latency
