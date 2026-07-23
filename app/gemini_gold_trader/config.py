@@ -68,6 +68,7 @@ class GeminiGoldRuntimeConfig:
     live_lot_size: float
     live_mirror_enabled: bool
     max_live_trades_day: int
+    max_open_positions: int
     confidence_threshold: int
     use_limit_entry: bool
     pending_entry_timeout_min: int
@@ -146,6 +147,9 @@ def env_defaults() -> GeminiGoldRuntimeConfig:
         live_lot_size=max(0.01, _env_float("GEMINI_GOLD_LIVE_LOT", 0.01)),
         live_mirror_enabled=False,
         max_live_trades_day=max(1, _env_int("GEMINI_GOLD_MAX_LIVE_TRADES_DAY", 3)),
+        # 0 (or negative) = no concurrent-open-position cap (off). The daily
+        # trade cap (max_trades_day) still bounds total activity per day.
+        max_open_positions=max(0, _env_int("GEMINI_GOLD_MAX_OPEN_POSITIONS", 0)),
         confidence_threshold=_env_int("GEMINI_GOLD_CONFIDENCE_THRESHOLD", 85),
         use_limit_entry=_env_bool("GEMINI_GOLD_USE_LIMIT_ENTRY", False),
         pending_entry_timeout_min=max(5, _env_int("GEMINI_GOLD_PENDING_TIMEOUT_MIN", 30)),
