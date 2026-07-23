@@ -770,7 +770,8 @@ function renderTradingSetup(j, { bindInputs = true } = {}) {
   document.getElementById('btn-save-demo').disabled = demoAccounts.length === 0;
 
   const liveSel = document.getElementById('live-ctid-select');
-  const prevLive = _liveCtidDirty ? liveSel.value : (selectedLive?.ctid ? String(selectedLive.ctid) : '');
+  const savedLiveCtid = cfg.live_ctrader_account_id ? String(cfg.live_ctrader_account_id) : '';
+  const prevLive = _liveCtidDirty ? liveSel.value : (selectedLive?.ctid ? String(selectedLive.ctid) : savedLiveCtid);
   liveSel.innerHTML = '<option value="">Select live account…</option>' +
     liveAccounts.map(a => `<option value="${escapeHtml(a.ctid)}">${escapeHtml(a.label)}</option>`).join('');
   if (prevLive) liveSel.value = prevLive;
@@ -802,7 +803,9 @@ function renderLiveMirror(j, { bindInputs = true } = {}) {
   if (live) {
     statusLine.textContent = 'Switch to Demo mode to use live mirror (demo + live together).';
   } else if (enabled) {
-    statusLine.textContent = `Mirroring to #${cfg.live_ctrader_account_id || '?'} · ${cfg.live_lot_size || 0.01} lots · max ${cfg.max_live_trades_day || 3}/day`;
+    let line = `Mirroring to #${cfg.live_ctrader_account_id || '?'} · ${cfg.live_lot_size || 0.01} lots · max ${cfg.max_live_trades_day || 3}/day`;
+    if (cfg.dry_run) line += ' · turn dry-run OFF for live copies to fire';
+    statusLine.textContent = line;
   } else if (!(j.live_accounts || []).length) {
     statusLine.textContent = 'Save a live account above, then enable mirror when ready.';
   } else {
@@ -1202,9 +1205,14 @@ document.getElementById('btn-refresh-klines').onclick = async () => {
 };
 
 document.getElementById('btn-live-enable').onclick = async () => {
-  const ctid = document.getElementById('live-ctid-select').value;
+  const cfg = (window._ggLastStatus || {}).config || {};
+  const ctid = document.getElementById('live-ctid-select').value || cfg.live_ctrader_account_id || '';
   if (!ctid) {
     showToast('Select and save a live account first');
+    return;
+  }
+  if (isLiveMode(window._ggLastStatus || {})) {
+    showToast('Switch to Demo execution mode first');
     return;
   }
   const ok = window.confirm(
