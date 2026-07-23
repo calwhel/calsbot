@@ -42,8 +42,18 @@ def test_executor_records_broker_error_in_order_ctx():
     assert "execute_live_mirror_take" in EXECUTOR
     assert "maybe_live_mirror_after_demo" in EXECUTOR
     assert "gemini_gold_trader_live_mirror" in EXECUTOR
-    assert 'ex.outcome = "CANCELLED"' in EXECUTOR
-    assert "return None" in EXECUTOR
+    assert "place_market_order_resilient" in EXECUTOR
+    assert "GeminiGoldLiveMirror" in EXECUTOR
+    assert "enqueue_ctrader_order" not in EXECUTOR
+
+
+def test_live_mirror_places_directly_not_via_queue():
+    """Standalone gemini_gold_runner never holds the main executor lock —
+    queue-based live mirror always failed. Direct market place is required."""
+    assert "place_market_order_resilient" in EXECUTOR
+    assert 'label="GeminiGoldLiveMirror"' in EXECUTOR
+    assert "LIVE MIRROR filled" in EXECUTOR
+    assert 'status="filled"' in EXECUTOR
 
 
 def test_loop_uses_format_block_reason():
