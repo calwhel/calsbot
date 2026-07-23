@@ -31,9 +31,12 @@ _EXEC_SNAPSHOT_FRESH_TTL_S = max(
     15.0,
     float(os.environ.get("GEMINI_GOLD_EXEC_SNAPSHOT_FRESH_TTL_S", "45")),
 )
+# The reuse window must comfortably cover a full slow scan cycle (data assess +
+# two-step Gemini vision + kline fetches) so that a broker confirmed reachable at
+# scan start is still trusted at execution time even when the cycle runs long.
 _EXEC_SNAPSHOT_REUSE_TTL_S = max(
     _EXEC_SNAPSHOT_FRESH_TTL_S,
-    float(os.environ.get("GEMINI_GOLD_EXEC_SNAPSHOT_REUSE_TTL_S", "150")),
+    float(os.environ.get("GEMINI_GOLD_EXEC_SNAPSHOT_REUSE_TTL_S", "240")),
 )
 
 
@@ -134,4 +137,17 @@ async def broker_reachable_for_execution(
     err = str(snap.get("error") or "broker_unreachable")
     if snap.get("auth_cooldown_s"):
         err = f"auth_cooldown:{snap.get('auth_cooldown_s')}s"
+
+    # The fresh poll came back but the broker was momentarily unavailable
+    # (transient auth cooldown, host hiccup, etc.). If the broker was reachable
+    # recently enough in this same cycle, don't drop the trade — reuse that
+    # snapshot and let the order path do its own token refresh + auth retry.
+    if snapshot_is_reusable(cached_snapshot, cached_at, ttl_s=_EXEC_SNAPSHOT_REUSE_TTL_S):
+        logger.info(
+            "[gemini-gold] execution broker poll returned %s — reusing "
+            "cached scan-start snapshot instead of blocking",
+            err,
+        )
+        return True, "ok_cached_after_poll_error", cached_snapshot
+
     return False, err, snap
