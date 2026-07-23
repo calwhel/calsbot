@@ -1,6 +1,7 @@
 """Inline tick→bar updates in cTrader spot callback."""
 import time
 import unittest
+from unittest.mock import patch
 
 from app.services import ctrader_price_feed as feed
 
@@ -9,6 +10,7 @@ class TestInlineTickBars(unittest.TestCase):
     def setUp(self):
         feed._kline_cache.clear()
         feed._last_kline_update.clear()
+        feed._last_peer_persist.clear()
         feed._spot_cache.clear()
 
     def test_forming_bar_ohlc_tracks_ticks(self):
@@ -67,6 +69,28 @@ class TestInlineTickBars(unittest.TestCase):
         self.assertEqual(r15[4], 1.10)
         self.assertEqual(r5[4], 1.10)
         self.assertIn("EURUSD", feed._last_kline_update)
+
+    def test_tick_update_persists_snapshot_for_peers_throttled(self):
+        """Tick-rolled bars are persisted to the shared snapshot (once per
+        interval per timeframe) so non-feed peers stay fresh during trendbar
+        blocks, then throttled on rapid follow-up ticks."""
+        step5 = feed._TF_MINUTES["5m"] * 60_000
+        now_ms = int(time.time() * 1000)
+        bar5 = (now_ms // step5) * step5
+        feed._kline_cache[("XAUUSD", "5m", 80)] = (
+            [[bar5, 4000.0, 4001.0, 3999.0, 4000.0, 0.0]],
+            0.0,
+        )
+        with patch.object(feed, "_persist_klines_for_peers") as persist, patch.object(
+            feed, "_peer_persist_interval_s", return_value=20.0
+        ):
+            feed._update_kline_cache_on_tick("XAUUSD", 4002.0, now_ms + 1000)
+            self.assertEqual(persist.call_count, 1)
+            self.assertEqual(persist.call_args[0][0], "XAUUSD")
+            self.assertEqual(persist.call_args[0][1], "5m")
+            # Immediate follow-up tick is throttled (same interval window).
+            feed._update_kline_cache_on_tick("XAUUSD", 4003.0, now_ms + 2000)
+            self.assertEqual(persist.call_count, 1)
 
     def test_stale_rebuild_log_rate_limited(self):
         feed._stale_rebuild_log_at.clear()
