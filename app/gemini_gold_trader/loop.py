@@ -218,7 +218,9 @@ async def run_gemini_gold_trader_loop() -> None:
     async def _broker_gate_db(db):
         from app.gemini_gold_trader.broker_preflight import broker_reachable_for_execution
 
-        return await broker_reachable_for_execution(db, cfg, user_id=cfg.demo_user_id or 0)
+        return await broker_reachable_for_execution(
+            db, cfg, user_id=cfg.demo_user_id or 0, lightweight=True
+        )
 
     broker_ok, broker_reason, scan_broker_snap = await _call_with_db_session(_broker_gate_db)
     scan_broker_snap_at = time.monotonic() if scan_broker_snap else None
@@ -686,6 +688,7 @@ async def run_gemini_gold_trader_loop() -> None:
             user_id=cfg.demo_user_id or 0,
             cached_snapshot=scan_broker_snap,
             cached_at=scan_broker_snap_at,
+            lightweight=True,
         )
 
     broker_ok, broker_reason, _broker_snap = await _call_with_db_session(_broker_preflight_db)

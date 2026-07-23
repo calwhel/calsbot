@@ -3520,6 +3520,78 @@ async def get_broker_reconcile_snapshot_resilient(
     return out
 
 
+async def get_broker_positions_snapshot_resilient(
+    access_token: str,
+    ctid_trader_account_id: int,
+    *,
+    prefs=None,
+    user_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Lightweight reachability poll — open positions only (no balance/equity).
+
+    Same host-routing + token-refresh resilience as
+    ``get_broker_reconcile_snapshot_resilient`` but skips the balance/equity
+    trader request, so it is markedly faster for a pure reachability gate.
+    ``position_ids`` is None when the broker is unreachable; an empty set means
+    flat. Shape matches the full snapshot so callers are interchangeable.
+    """
+    out: Dict[str, Any] = {
+        "balance": None,
+        "equity": None,
+        "position_ids": None,
+        "error": None,
+        "host": None,
+    }
+    at = (access_token or "").strip()
+    if not at:
+        out["error"] = "no_ctrader_token"
+        return out
+    ctid = int(ctid_trader_account_id)
+    uid = int(user_id) if user_id else None
+
+    if uid:
+        at = await ensure_ctrader_access_token_for_order(uid, at, prefs=prefs)
+        if not at:
+            out["error"] = "no_ctrader_token"
+            return out
+
+    hosts = _routing_hosts_for_account(prefs, ctid)
+
+    async def _try_hosts(token: str) -> Optional[set]:
+        for h in hosts:
+            ids = await _get_open_position_ids(token, ctid, host=h, user_id=uid)
+            if ids is not None:
+                out["host"] = h
+                return ids
+        return None
+
+    ids = await _try_hosts(at)
+    if ids is None and uid:
+        refreshed = await request_ctrader_token_refresh(uid, wait_s=12.0)
+        cand = (refreshed or "").strip()
+        if cand and cand != at:
+            ids = await _try_hosts(cand)
+        else:
+            fresh = _latest_ctrader_access_token(uid)
+            if fresh and fresh != at:
+                ids = await _try_hosts(fresh)
+
+    if ids is None:
+        if uid and _user_ctid_has_auth_backoff(uid, ctid):
+            rem = _account_auth_cooldown_remaining(uid, CTRADER_HOST_LIVE, ctid)
+            if rem <= 0:
+                rem = _account_auth_cooldown_remaining(uid, CTRADER_HOST_DEMO, ctid)
+            if rem > 0:
+                out["error"] = "auth_cooldown"
+                out["auth_cooldown_s"] = max(0, int(rem))
+                return out
+        out["error"] = "broker_unreachable"
+        return out
+
+    out["position_ids"] = ids
+    return out
+
+
 async def _get_open_position_ids(
     access_token: str,
     ctid_trader_account_id: int,

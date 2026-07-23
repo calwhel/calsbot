@@ -532,8 +532,22 @@ def _trendbar_fetch_allowed() -> bool:
     return trendbar_fetch_blocked_reason() is None
 
 
-def _note_trendbar_block(reason: str, retry_s: float = 60.0) -> None:
+def _trendbar_backoff_s() -> float:
+    """Backoff after a transient trendbar fetch failure (env-tunable).
+
+    Shortened from the old fixed 60s so cTrader data outages recover quickly —
+    a stream timeout / empty response is usually transient.
+    """
+    try:
+        return max(5.0, float(os.environ.get("CTRADER_TRENDBAR_BACKOFF_S", "20")))
+    except (TypeError, ValueError):
+        return 20.0
+
+
+def _note_trendbar_block(reason: str, retry_s: Optional[float] = None) -> None:
     global _trendbar_block_reason, _trendbar_block_until
+    if retry_s is None:
+        retry_s = _trendbar_backoff_s()
     now = time.monotonic()
     if reason != _trendbar_block_reason or now >= _trendbar_block_until:
         logger.warning(
@@ -543,6 +557,13 @@ def _note_trendbar_block(reason: str, retry_s: float = 60.0) -> None:
         )
     _trendbar_block_reason = reason
     _trendbar_block_until = now + retry_s
+
+
+def clear_trendbar_block() -> None:
+    """Force-clear the trendbar backoff so the next fetch is attempted now."""
+    global _trendbar_block_reason, _trendbar_block_until
+    _trendbar_block_reason = None
+    _trendbar_block_until = 0.0
 
 
 def _note_trendbar_ok(symbol: str) -> None:
@@ -879,13 +900,13 @@ async def _fetch_trendbars_on_live_stream(
                 _note_trendbar_ok(sym_up)
                 _trendbar_last_api[(sym_up, timeframe)] = time.monotonic()
             else:
-                _note_trendbar_block(f"empty response {sym_up} {timeframe}", 60.0)
+                _note_trendbar_block(f"empty response {sym_up} {timeframe}")
             return rows
         except asyncio.TimeoutError:
-            _note_trendbar_block(f"stream timeout {sym_up} {timeframe}", 60.0)
+            _note_trendbar_block(f"stream timeout {sym_up} {timeframe}")
             return []
         except Exception as exc:
-            _note_trendbar_block(f"{type(exc).__name__}: {exc}"[:80], 60.0)
+            _note_trendbar_block(f"{type(exc).__name__}: {exc}"[:80])
             return []
         finally:
             _pending_trendbar = None
@@ -1472,8 +1493,10 @@ async def restart_kline_builder(reason: str = "manual") -> None:
     except Exception:
         pass
     await _invalidate_tb_conn()
+    clear_trendbar_block()
     logger.info(
-        "[CTraderFeed] kline builder restarted (%s — cleared %s cache entries)",
+        "[CTraderFeed] kline builder restarted (%s — cleared %s cache entries, "
+        "trendbar block reset)",
         reason,
         n,
     )

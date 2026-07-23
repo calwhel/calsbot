@@ -35,11 +35,11 @@ def _refresh_age_s() -> float:
 def _restart_min_interval_s() -> float:
     try:
         return max(
-            60.0,
-            float(os.environ.get("GOLD_AI_KLINE_RESTART_MIN_INTERVAL_S", "180")),
+            45.0,
+            float(os.environ.get("GOLD_AI_KLINE_RESTART_MIN_INTERVAL_S", "90")),
         )
     except (TypeError, ValueError):
-        return 180.0
+        return 90.0
 
 
 async def _maybe_restart_ctrader_builder(reason: str) -> bool:

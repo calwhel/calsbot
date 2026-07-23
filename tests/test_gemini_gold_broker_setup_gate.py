@@ -203,6 +203,38 @@ def test_broker_preflight_falls_back_to_cache_on_timeout():
     asyncio.run(_run())
 
 
+def test_broker_preflight_lightweight_uses_positions_poll():
+    """lightweight=True calls the positions-only poll, not the full reconcile."""
+    from app.gemini_gold_trader.broker_preflight import broker_reachable_for_execution
+
+    cfg = _exec_cfg()
+    db = MagicMock()
+    prefs = MagicMock()
+    prefs.ctrader_access_token = "tok"
+    db.query.return_value.filter.return_value.first.return_value = prefs
+    light = AsyncMock(return_value={"position_ids": {5}})
+    full = AsyncMock(return_value={"position_ids": {99}})
+
+    async def _run():
+        with patch(
+            "app.services.ctrader_client.get_broker_positions_snapshot_resilient",
+            new=light,
+        ), patch(
+            "app.services.ctrader_client.get_broker_reconcile_snapshot_resilient",
+            new=full,
+        ):
+            ok, reason, snap = await broker_reachable_for_execution(
+                db, cfg, user_id=5, lightweight=True
+            )
+        assert ok is True
+        assert reason == "ok"
+        assert snap == {"position_ids": {5}}
+        light.assert_awaited_once()
+        full.assert_not_awaited()
+
+    asyncio.run(_run())
+
+
 def test_broker_preflight_stale_cache_does_not_bypass():
     """A stale cached snapshot must not skip the live poll."""
     import time as _t

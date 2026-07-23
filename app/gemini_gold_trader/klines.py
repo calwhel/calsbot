@@ -147,29 +147,50 @@ async def get_chart_klines(
     bars: List[List[float]] = []
     tradfi_source = ""
 
+    # Gemini Gold is cTrader-only: when cTrader trendbars are actively blocked,
+    # the shared tradfi chain would burn 20-48s on Coinbase/Kraken/FMP timeouts
+    # only for us to discard the result. Skip straight to the direct cTrader
+    # retry + Postgres cTrader snapshot instead.
+    trendbar_block_reason = None
     try:
-        bars = await get_klines(
-            SYMBOL,
-            ASSET_CLASS,
+        from app.services import ctrader_price_feed as _ctf
+
+        trendbar_block_reason = _ctf.trendbar_fetch_blocked_reason()
+    except Exception:
+        trendbar_block_reason = None
+    trendbar_blocked = bool(trendbar_block_reason)
+
+    if not trendbar_blocked:
+        try:
+            bars = await get_klines(
+                SYMBOL,
+                ASSET_CLASS,
+                timeframe,
+                limit,
+                ctrader_user_id=user_id,
+            ) or []
+            tradfi_source = (get_metal_kline_source(SYMBOL, timeframe, limit) or "tradfi").lower()
+            meta["source"] = tradfi_source
+        except Exception as exc:
+            logger.warning("[gemini-gold] tradfi klines failed %s %s: %s", SYMBOL, timeframe, exc)
+            meta["error"] = str(exc)
+
+        if bars:
+            bars = _synthesize_forming_bar(bars, timeframe, limit)
+
+        if _is_ctrader_kline_source(tradfi_source) and _bars_fresh(bars, timeframe):
+            meta["bars"] = len(bars)
+            meta["status"] = "ok"
+            meta["bar_age_s"] = newest_bar_age_s(bars)
+            meta["last_close"] = float(bars[-1][4]) if len(bars[-1]) > 4 else None
+            return bars, meta
+    else:
+        meta["source"] = "ctrader_blocked"
+        logger.info(
+            "[gemini-gold] trendbars blocked (%s) — skipping tradfi externals for %s",
+            trendbar_block_reason or "?",
             timeframe,
-            limit,
-            ctrader_user_id=user_id,
-        ) or []
-        tradfi_source = (get_metal_kline_source(SYMBOL, timeframe, limit) or "tradfi").lower()
-        meta["source"] = tradfi_source
-    except Exception as exc:
-        logger.warning("[gemini-gold] tradfi klines failed %s %s: %s", SYMBOL, timeframe, exc)
-        meta["error"] = str(exc)
-
-    if bars:
-        bars = _synthesize_forming_bar(bars, timeframe, limit)
-
-    if _is_ctrader_kline_source(tradfi_source) and _bars_fresh(bars, timeframe):
-        meta["bars"] = len(bars)
-        meta["status"] = "ok"
-        meta["bar_age_s"] = newest_bar_age_s(bars)
-        meta["last_close"] = float(bars[-1][4]) if len(bars[-1]) > 4 else None
-        return bars, meta
+        )
 
     if not _is_ctrader_kline_source(tradfi_source):
         ct_rows, ct_src = await _fetch_ctrader_chart_klines(

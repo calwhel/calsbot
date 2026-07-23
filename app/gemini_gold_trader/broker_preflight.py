@@ -59,6 +59,7 @@ async def broker_reachable_for_execution(
     user_id: Optional[int] = None,
     cached_snapshot: Optional[Dict[str, Any]] = None,
     cached_at: Optional[float] = None,
+    lightweight: bool = False,
 ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
     """
     Quick reconcile poll — returns (ok, reason, snapshot).
@@ -67,6 +68,9 @@ async def broker_reachable_for_execution(
     When ``cached_snapshot`` (with a monotonic ``cached_at`` timestamp) from an
     earlier gate in the same cycle is still fresh, it is reused directly to
     avoid a redundant broker poll.
+
+    ``lightweight`` polls open positions only (skips the balance/equity trader
+    request) — enough for a reachability gate and markedly faster.
     """
     uid = int(user_id or cfg.demo_user_id or 0)
     ctid = active_ctrader_account_id(cfg)
@@ -79,16 +83,25 @@ async def broker_reachable_for_execution(
         return True, "ok_cached", cached_snapshot
 
     from app.models import UserPreference
-    from app.services.ctrader_client import get_broker_reconcile_snapshot_resilient
+    from app.services.ctrader_client import (
+        get_broker_positions_snapshot_resilient,
+        get_broker_reconcile_snapshot_resilient,
+    )
 
     prefs = db.query(UserPreference).filter(UserPreference.user_id == uid).first()
     token = getattr(prefs, "ctrader_access_token", None) if prefs else None
     if not token:
         return False, "no_ctrader_token", None
 
+    poll = (
+        get_broker_positions_snapshot_resilient
+        if lightweight
+        else get_broker_reconcile_snapshot_resilient
+    )
+
     try:
         snap = await asyncio.wait_for(
-            get_broker_reconcile_snapshot_resilient(
+            poll(
                 str(token),
                 int(ctid),
                 prefs=prefs,
