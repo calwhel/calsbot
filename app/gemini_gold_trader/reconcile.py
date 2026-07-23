@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -109,7 +110,9 @@ def reconcile_orphan_open_executions_sync(
     """
     from app.services.strategy_executor import _ctrader_position_id_from_execution
 
-    rows = _gemini_open_query(db, user_id).all()
+    from app.services.strategy_executor import _ctrader_position_id_from_execution
+
+    rows = _gemini_open_query(db, user_id, demo_ctid=demo_ctid).all()
     before = [_execution_snapshot(ex) for ex in rows]
     closed: List[Dict[str, Any]] = []
 
@@ -120,37 +123,57 @@ def reconcile_orphan_open_executions_sync(
         open_ids = None
 
     ctid_str = str(demo_ctid or "").strip()
+    grace_s = max(60.0, float(os.environ.get("GEMINI_GOLD_ORPHAN_GRACE_S", "300")))
+    now = datetime.utcnow()
 
-    # Broker account is flat — every gemini OPEN row is a phantom cap blocker.
+    def _within_grace(ex) -> bool:
+        fired = getattr(ex, "fired_at", None)
+        if fired is None:
+            return False
+        try:
+            return (now - fired).total_seconds() < grace_s
+        except Exception:
+            return False
+
+    # Broker account is flat — cancel phantom OPEN rows. Keep recently-fired
+    # rows that already have a broker position_id (auth cooldown / empty polls
+    # can falsely report flat and wipe real fills).
     if open_ids is not None and len(open_ids) == 0 and rows:
         for ex in rows:
-            if dry_run:
-                closed.append(
-                    {
-                        **_execution_snapshot(ex),
-                        "cancel_reason": f"broker flat on demo ctid {ctid_str or '?'}",
-                    }
+            pos_id = _ctrader_position_id_from_execution(ex)
+            if pos_id is not None and _within_grace(ex):
+                logger.info(
+                    "[gemini-gold] skip orphan cancel exec=%s — within grace with pos=%s",
+                    ex.id,
+                    pos_id,
                 )
                 continue
-            closed.append(
-                _cancel_orphan_execution(
-                    db,
-                    ex,
-                    reason=f"broker flat on demo ctid {ctid_str or '?'}",
-                )
-            )
+            reason = f"broker flat on demo ctid {ctid_str or '?'}"
+            if dry_run:
+                closed.append({**_execution_snapshot(ex), "cancel_reason": reason})
+                continue
+            closed.append(_cancel_orphan_execution(db, ex, reason=reason))
         return before, closed
 
     for ex in rows:
         pos_id = _ctrader_position_id_from_execution(ex)
 
         if pos_id is None:
+            if _within_grace(ex):
+                continue
             reason = "no broker position_id (order never opened)"
         elif open_ids is None:
             continue
         elif pos_id in open_ids:
             continue
         else:
+            if _within_grace(ex):
+                logger.info(
+                    "[gemini-gold] skip orphan cancel exec=%s — within grace pos=%s not in broker set yet",
+                    ex.id,
+                    pos_id,
+                )
+                continue
             reason = f"broker position {pos_id} absent on ctid {ctid_str or '?'}"
 
         if dry_run:
