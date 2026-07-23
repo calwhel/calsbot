@@ -26,6 +26,50 @@ def _make_ex(**kwargs):
     return StrategyExecution(**defaults)
 
 
+def test_keeps_live_mirror_open_when_demo_broker_flat():
+    """Live-mirror OPEN rows must not be cancelled against the demo account poll."""
+    db = MagicMock()
+    demo_ex = _make_ex(id=201, notes="gemini_gold_trader decision_id=9")
+    live_ex = _make_ex(
+        id=202,
+        ctrader_account_id="999888",
+        notes="gemini_gold_trader_live_mirror decision_id=9 demo_exec=201",
+    )
+    # Query filter should exclude live_mirror — simulate by returning only demo rows
+    # that match the updated SQL filter. Also assert the filter excludes live_mirror.
+    from app.gemini_gold_trader import reconcile as recon
+
+    captured = {}
+
+    class _FakeQuery:
+        def filter(self, *args, **kwargs):
+            captured["filter_args"] = args
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return [demo_ex]
+
+    db.query.return_value = _FakeQuery()
+
+    before, closed = recon.reconcile_orphan_open_executions_sync(
+        db,
+        user_id=42,
+        demo_ctid="47664720",
+        broker_open_position_ids=set(),
+        dry_run=False,
+    )
+
+    assert len(before) == 1
+    assert len(closed) == 1
+    assert demo_ex.outcome == "CANCELLED"
+    assert live_ex.outcome == "OPEN"
+    filter_src = " ".join(str(a) for a in captured.get("filter_args", ()))
+    assert "NOT LIKE" in filter_src.upper()
+
+
 def test_cancels_open_row_without_broker_position_id():
     db = MagicMock()
     ex = _make_ex(id=101)

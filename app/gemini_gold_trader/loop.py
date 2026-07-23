@@ -18,7 +18,7 @@ from app.gemini_gold_trader.config import (
 )
 from app.gemini_gold_trader.db_thread import run_in_db_thread, run_with_db, with_db_session
 from app.gemini_gold_trader.block_reason import format_block_reason
-from app.gemini_gold_trader.executor import execute_live_mirror_take, execute_take
+from app.gemini_gold_trader.executor import execute_take, maybe_live_mirror_after_demo
 from app.gemini_gold_trader.fire_validation import refresh_spot_after_gemini, stale_entry_recheck
 from app.gemini_gold_trader.data_quality import assess_gemini_market_data, format_data_source, gemini_data_ok_for_scan
 from app.gemini_gold_trader.funnel import record as funnel_record, snapshot as funnel_snapshot
@@ -30,7 +30,6 @@ from app.gemini_gold_trader.gemini import (
 )
 from app.gemini_gold_trader.guardrails import (
     check_can_call_gemini,
-    check_can_execute_live_mirror,
     is_live_execution_mode,
     try_reserve_execution,
     merge_config,
@@ -48,7 +47,6 @@ from app.gemini_gold_trader.telegram_notify import (
     maybe_notify_call_cap_reached,
     maybe_notify_fallback_klines,
     notify_decision,
-    notify_live_mirror_filled,
 )
 from app.gemini_gold_trader.pending_entry import pending_status_label, sync_pending_entries
 from app.gemini_gold_trader.trade_hours import resolve_trading_session
@@ -77,25 +75,6 @@ def _get_scan_cycle_lock() -> asyncio.Lock:
     if _scan_cycle_lock is None:
         _scan_cycle_lock = asyncio.Lock()
     return _scan_cycle_lock
-
-
-def _update_live_mirror_row(
-    db,
-    row_id: int,
-    *,
-    live_exec_id: int | None,
-    status: str,
-    error: str | None = None,
-):
-    row = db.query(GeminiGoldDecision).filter_by(id=row_id).first()
-    if not row:
-        return
-    if live_exec_id:
-        row.live_mirror_execution_id = live_exec_id
-    row.live_mirror_status = status
-    if error is not None:
-        row.live_mirror_error = error
-    db.commit()
 
 
 def active_session(now: datetime, cfg=None) -> Optional[str]:
@@ -272,59 +251,14 @@ async def run_gemini_gold_trader_loop() -> None:
         await run_with_db(_mark)
 
     async def _live_mirror_after_demo(cfg_, decision_, decision_id_, demo_exec_id_):
-        if is_live_execution_mode(cfg_):
-            return
-        if not cfg_.live_mirror_enabled:
-            return
-        ok_live, live_reason = await run_with_db(
-            check_can_execute_live_mirror, cfg_, cfg_.demo_user_id or 0
+        await _call_with_db_session(
+            maybe_live_mirror_after_demo,
+            cfg=cfg_,
+            decision=decision_,
+            decision_id=decision_id_,
+            demo_execution_id=demo_exec_id_,
+            session=str(session or ""),
         )
-        if ok_live:
-            live_exec_id = await _call_with_db_session(
-                execute_live_mirror_take,
-                cfg=cfg_,
-                decision=decision_,
-                decision_id=decision_id_,
-                demo_execution_id=demo_exec_id_,
-            )
-            if live_exec_id:
-                await run_with_db(
-                    _update_live_mirror_row,
-                    decision_id_,
-                    live_exec_id=live_exec_id,
-                    status="pending",
-                )
-                try:
-                    await notify_live_mirror_filled(
-                        session=str(session or ""),
-                        decision=decision_,
-                        confidence=int(decision_.get("confidence") or 0),
-                        decision_id=decision_id_,
-                        live_execution_id=live_exec_id,
-                        demo_execution_id=demo_exec_id_,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "[gemini-gold] live mirror notify failed decision=%s: %s",
-                        decision_id_,
-                        exc,
-                    )
-            else:
-                await run_with_db(
-                    _update_live_mirror_row,
-                    decision_id_,
-                    live_exec_id=None,
-                    status="failed",
-                    error="live mirror enqueue rejected",
-                )
-        elif cfg_.live_mirror_enabled:
-            await run_with_db(
-                _update_live_mirror_row,
-                decision_id_,
-                live_exec_id=None,
-                status="skipped",
-                error=live_reason,
-            )
 
     orb_handled = await maybe_run_orb_strategy(
         cfg=cfg,

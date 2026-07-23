@@ -40,8 +40,24 @@ def test_executor_records_broker_error_in_order_ctx():
     assert "active_lot_size(cfg)" in EXECUTOR
     assert "broker fill without position_id" in EXECUTOR
     assert "execute_live_mirror_take" in EXECUTOR
+    assert "maybe_live_mirror_after_demo" in EXECUTOR
     assert "gemini_gold_trader_live_mirror" in EXECUTOR
+    assert 'ex.outcome = "CANCELLED"' in EXECUTOR
+    assert "return None" in EXECUTOR
 
 
 def test_loop_uses_format_block_reason():
     assert "format_block_reason" in LOOP
+    assert "maybe_live_mirror_after_demo" in LOOP
+
+
+def test_pending_entry_calls_live_mirror():
+    pending = (
+        ROOT / "app" / "gemini_gold_trader" / "pending_entry.py"
+    ).read_text()
+    assert "maybe_live_mirror_after_demo" in pending
+
+
+def test_orphan_reconcile_excludes_live_mirror():
+    recon = (ROOT / "app" / "gemini_gold_trader" / "reconcile.py").read_text()
+    assert '~StrategyExecution.notes.like("%live_mirror%")' in recon

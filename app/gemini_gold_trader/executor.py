@@ -385,6 +385,77 @@ async def execute_take_market(
     return ex.id
 
 
+async def maybe_live_mirror_after_demo(
+    *,
+    db,
+    cfg: GeminiGoldRuntimeConfig,
+    decision: Dict[str, Any],
+    decision_id: int,
+    demo_execution_id: int,
+    session: str = "",
+) -> None:
+    """Copy a successful demo TAKE to the configured live account when enabled."""
+    from app.gemini_gold_trader.guardrails import (
+        check_can_execute_live_mirror,
+        is_live_execution_mode,
+    )
+    from app.gemini_gold_trader.models import GeminiGoldDecision
+
+    if is_live_execution_mode(cfg) or not cfg.live_mirror_enabled:
+        return
+
+    def _update(*, live_exec_id: Optional[int], status: str, error: Optional[str] = None):
+        row = db.query(GeminiGoldDecision).filter_by(id=int(decision_id)).first()
+        if not row:
+            return
+        if live_exec_id:
+            row.live_mirror_execution_id = live_exec_id
+        row.live_mirror_status = status
+        if error is not None:
+            row.live_mirror_error = error
+
+    ok_live, live_reason = check_can_execute_live_mirror(db, cfg, cfg.demo_user_id or 0)
+    if not ok_live:
+        _update(live_exec_id=None, status="skipped", error=live_reason)
+        await db_commit(db)
+        return
+
+    live_exec_id = await execute_live_mirror_take(
+        db=db,
+        cfg=cfg,
+        decision=decision,
+        decision_id=decision_id,
+        demo_execution_id=demo_execution_id,
+    )
+    if live_exec_id:
+        _update(live_exec_id=live_exec_id, status="pending")
+        await db_commit(db)
+        try:
+            from app.gemini_gold_trader.telegram_notify import notify_live_mirror_filled
+
+            await notify_live_mirror_filled(
+                session=str(session or decision.get("session") or ""),
+                decision=decision,
+                confidence=int(decision.get("confidence") or 0),
+                decision_id=decision_id,
+                live_execution_id=live_exec_id,
+                demo_execution_id=demo_execution_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[gemini-gold] live mirror notify failed decision=%s: %s",
+                decision_id,
+                exc,
+            )
+    else:
+        _update(
+            live_exec_id=None,
+            status="failed",
+            error="live mirror enqueue rejected",
+        )
+        await db_commit(db)
+
+
 def _resolve_live_mirror_trader(db, cfg: GeminiGoldRuntimeConfig):
     from app.models import User, UserPreference
 
@@ -488,9 +559,13 @@ async def execute_live_mirror_take(
     ok = await enqueue_ctrader_order(job)
     if not ok:
         ex.notes = (ex.notes or "") + " | enqueue_failed"
+        ex.outcome = "CANCELLED"
+        ex.closed_at = datetime.utcnow()
         await db_commit(db)
         logger.warning("[gemini-gold] live mirror enqueue failed exec=%s", ex.id)
-        return ex.id
+        # Return None so callers mark live_mirror_status=failed and do not
+        # leave a phantom OPEN that blocks max_live_open_position.
+        return None
 
     logger.info(
         "[gemini-gold] LIVE MIRROR queued exec=%s ctid=%s %s %s lots=%s decision=%s",

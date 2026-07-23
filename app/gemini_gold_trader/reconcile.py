@@ -15,6 +15,9 @@ def _gemini_open_query(db, user_id: int, demo_ctid: Optional[str] = None):
     from app.strategy_models import StrategyExecution
     from sqlalchemy import or_
 
+    # Demo-leg OPEN rows only. Live-mirror notes also contain "gemini_gold_trader"
+    # (…_live_mirror) and must never be cancelled against the demo account poll —
+    # that race cancelled queued mirrors before the ctrader order worker could fill.
     q = (
         db.query(StrategyExecution)
         .filter(
@@ -22,6 +25,7 @@ def _gemini_open_query(db, user_id: int, demo_ctid: Optional[str] = None):
             StrategyExecution.symbol == "XAUUSD",
             StrategyExecution.outcome == "OPEN",
             StrategyExecution.notes.like("%gemini_gold_trader%"),
+            ~StrategyExecution.notes.like("%live_mirror%"),
         )
     )
     if demo_ctid:

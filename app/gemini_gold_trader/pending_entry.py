@@ -176,6 +176,23 @@ async def _try_market_fill_from_pending(
         dec_row.skip_reason = None
         await db_commit(db)
         try:
+            from app.gemini_gold_trader.executor import maybe_live_mirror_after_demo
+
+            await maybe_live_mirror_after_demo(
+                db=db,
+                cfg=cfg,
+                decision=decision,
+                decision_id=row.decision_id,
+                demo_execution_id=exec_id,
+                session=str(row.session or getattr(dec_row, "session", None) or ""),
+            )
+        except Exception as exc:
+            logger.warning(
+                "[gemini-gold] entry-watch live mirror failed decision=%s: %s",
+                row.decision_id,
+                exc,
+            )
+        try:
             from app.gemini_gold_trader.guardrails import is_live_execution_mode
             from app.gemini_gold_trader.telegram_notify import notify_decision
 
@@ -280,6 +297,23 @@ async def sync_pending_entries(db, cfg, spot: float) -> int:
             dec_row.execution_id = exec_id
             await db_commit(db)
             filled += 1
+            try:
+                from app.gemini_gold_trader.executor import maybe_live_mirror_after_demo
+
+                await maybe_live_mirror_after_demo(
+                    db=db,
+                    cfg=cfg,
+                    decision=decision,
+                    decision_id=row.decision_id,
+                    demo_execution_id=exec_id,
+                    session=str(row.session or getattr(dec_row, "session", None) or ""),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[gemini-gold] entry-watch live mirror failed decision=%s: %s",
+                    row.decision_id,
+                    exc,
+                )
             try:
                 from app.gemini_gold_trader.guardrails import is_live_execution_mode
                 from app.gemini_gold_trader.telegram_notify import notify_decision
