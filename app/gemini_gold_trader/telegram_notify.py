@@ -202,6 +202,60 @@ async def notify_live_mirror_filled(
     )
 
 
+_LIVE_MIRROR_SKIP_REASONS = {
+    "live_mirror_disabled": "Live mirror is turned off",
+    "live_execution_mode": "Bot is in live execution mode (mirror n/a)",
+    "kill_switch": "Kill switch is active",
+    "dry_run": "Dry-run mode is on — no real orders",
+    "live_account_not_configured": "No live cTrader account configured",
+    "max_live_trades_day": "Daily live-trade cap reached",
+    "max_live_open_position": "A live position is already open (max 1 at a time)",
+    "live mirror order rejected": "Broker rejected the live order",
+}
+
+
+async def notify_live_mirror_skipped(
+    *,
+    session: str,
+    decision: Dict[str, Any],
+    confidence: int,
+    decision_id: int,
+    demo_execution_id: int,
+    reason: str,
+    status: str = "skipped",
+) -> bool:
+    """Alert when a demo TAKE did NOT mirror to the live account, with the reason.
+
+    Makes silent live-mirror misses visible so the blocker is obvious.
+    """
+    direction = (decision.get("direction") or "—").upper()
+    setup = str(decision.get("setup_type") or "").strip()
+    friendly = _LIVE_MIRROR_SKIP_REASONS.get(reason, reason or "unknown")
+    icon = "❌" if status == "failed" else "⏭️"
+    lines = [
+        f"<b>{_PREFIX} — LIVE MIRROR SKIPPED</b>",
+        f"Session: {_html_escape(session or '—')}",
+    ]
+    if setup:
+        lines.append(f"Setup: <b>{_html_escape(setup)}</b>")
+    lines.extend(
+        [
+            f"Direction: <b>{direction}</b>",
+            f"Confidence: <b>{confidence}%</b>",
+            (
+                f"Status: {icon} Live order NOT placed — "
+                f"{_html_escape(friendly)} ({_html_escape(reason or 'unknown')})"
+            ),
+            f"Demo still placed (demo exec #{demo_execution_id}, decision #{decision_id})",
+        ]
+    )
+    return await _send(
+        "\n".join(lines),
+        msg_type="gemini_gold_live_mirror_skip",
+        exec_id=demo_execution_id,
+    )
+
+
 async def notify_decision(
     *,
     session: str,
