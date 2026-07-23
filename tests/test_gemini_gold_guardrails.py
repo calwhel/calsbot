@@ -176,6 +176,61 @@ def test_check_can_execute_live_mirror_blocks_dry_run():
     assert reason == "dry_run"
 
 
+def test_assert_live_account_allows_configured_ctid_when_islive_unknown():
+    class _PrefsUnknown:
+        ctrader_accounts = '[{"ctidTraderAccountId": 67890}]'
+
+    cfg = env_defaults()
+    cfg.live_ctrader_account_id = "67890"
+    assert_live_account(_PrefsUnknown(), 67890, cfg)
+
+
+def test_assert_live_account_rejects_demo_when_islive_false():
+    class _PrefsDemo:
+        ctrader_accounts = '[{"ctidTraderAccountId": 67890, "isLive": false}]'
+
+    cfg = env_defaults()
+    cfg.live_ctrader_account_id = "67890"
+    from app.gemini_gold_trader.guardrails import LiveAccountRequired
+
+    try:
+        assert_live_account(_PrefsDemo(), 67890, cfg)
+        assert False, "expected LiveAccountRequired"
+    except LiveAccountRequired:
+        pass
+
+
+def test_clear_stale_live_mirror_phantoms():
+    from datetime import datetime, timedelta
+    from app.gemini_gold_trader.guardrails import clear_stale_live_mirror_phantoms
+
+    old = MagicMock()
+    old.outcome = "OPEN"
+    old.notes = "gemini_gold_trader_live_mirror decision_id=1"
+    old.ctrader_position_id = None
+    old.fired_at = datetime.utcnow() - timedelta(minutes=30)
+    old.closed_at = None
+
+    fresh = MagicMock()
+    fresh.outcome = "OPEN"
+    fresh.notes = "gemini_gold_trader_live_mirror decision_id=2"
+    fresh.ctrader_position_id = None
+    fresh.fired_at = datetime.utcnow()
+    fresh.closed_at = None
+
+    db = MagicMock()
+    # First filter chain ends with .all() returning only stale phantoms (SQL would exclude fresh)
+    db.query.return_value.filter.return_value.all.return_value = [old]
+
+    cleared = clear_stale_live_mirror_phantoms(db, 42)
+    assert cleared == 1
+    assert old.outcome == "CANCELLED"
+    assert old.closed_at is not None
+    assert "live_mirror_phantom_cleared" in (old.notes or "")
+    db.commit.assert_called_once()
+    # fresh never returned by query — remains OPEN
+    assert fresh.outcome == "OPEN"
+
 def test_resolve_live_mirror_status_pending_and_filled():
     class _Ex:
         outcome = "OPEN"

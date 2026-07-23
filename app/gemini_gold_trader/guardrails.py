@@ -172,13 +172,28 @@ def assert_live_account(prefs, ctid: int, cfg: GeminiGoldRuntimeConfig) -> None:
         raise LiveAccountRequired(
             f"ctid {ctid} != configured live GEMINI_GOLD_LIVE_ACCOUNT_ID"
         )
+    from app.gemini_gold_trader.accounts import find_live_account, live_accounts_from_prefs
     from app.services.ctrader_client import _account_is_live
 
     live = _account_is_live(prefs, ctid)
-    if live is not True:
+    if live is True:
+        return
+    if live is False:
         raise LiveAccountRequired(
-            f"Account {ctid} is not confirmed live (isLive={live}) — order blocked"
+            f"Account {ctid} is confirmed demo (isLive=false) — live mirror blocked"
         )
+    live_list = live_accounts_from_prefs(prefs)
+    if find_live_account(live_list, str(ctid)):
+        return
+    if cfg.live_ctrader_account_id and str(ctid) == str(cfg.live_ctrader_account_id):
+        logger.warning(
+            "[gemini-gold] account %s missing isLive=true metadata — allowing configured live ctid",
+            ctid,
+        )
+        return
+    raise LiveAccountRequired(
+        f"Account {ctid} is not confirmed live (isLive={live}) — order blocked"
+    )
 
 
 def assert_execution_account(prefs, ctid: int, cfg: GeminiGoldRuntimeConfig) -> None:
@@ -347,6 +362,77 @@ def live_open_position_count(db, user_id: int) -> int:
     return int(_live_mirror_execution_filter(q).scalar() or 0)
 
 
+_LIVE_MIRROR_PHANTOM_TTL_MIN = max(
+    5,
+    int(os.environ.get("GEMINI_GOLD_LIVE_MIRROR_PHANTOM_TTL_MIN", "12")),
+)
+
+
+def clear_stale_live_mirror_phantoms(db, user_id: int) -> int:
+    """Cancel OPEN live-mirror rows that never got a broker position_id.
+
+    Before the orphan-reconcile fix, demo cleanup cancelled queued mirrors; some
+    survived as phantoms and permanently blocked max_live_open_position.
+    """
+    from app.strategy_models import StrategyExecution
+
+    if not user_id:
+        return 0
+    cutoff = datetime.utcnow() - timedelta(minutes=_LIVE_MIRROR_PHANTOM_TTL_MIN)
+    q = db.query(StrategyExecution).filter(
+        StrategyExecution.user_id == int(user_id),
+        StrategyExecution.symbol == "XAUUSD",
+        StrategyExecution.outcome == "OPEN",
+        StrategyExecution.notes.like("%gemini_gold_trader_live_mirror%"),
+        or_(
+            StrategyExecution.ctrader_position_id.is_(None),
+            StrategyExecution.ctrader_position_id == "",
+        ),
+        or_(
+            StrategyExecution.fired_at.is_(None),
+            StrategyExecution.fired_at < cutoff,
+        ),
+    )
+    rows = q.all()
+    if not rows:
+        return 0
+    now = datetime.utcnow()
+    for ex in rows:
+        ex.outcome = "CANCELLED"
+        ex.closed_at = now
+        note = (ex.notes or "").strip()
+        suffix = " | live_mirror_phantom_cleared"
+        ex.notes = f"{note}{suffix}" if note else suffix.strip(" |")
+    db.commit()
+    logger.warning(
+        "[gemini-gold] cleared %s stale live-mirror phantom OPEN row(s) user=%s",
+        len(rows),
+        user_id,
+    )
+    return len(rows)
+
+
+def live_mirror_readiness(db, cfg: GeminiGoldRuntimeConfig, user_id: int) -> dict:
+    """UI/status helper — why live mirror will or will not fire on next demo TAKE."""
+    cleared = 0
+    try:
+        cleared = clear_stale_live_mirror_phantoms(db, user_id)
+    except Exception as exc:
+        logger.warning("[gemini-gold] live mirror phantom clear failed: %s", exc)
+    ok, reason = check_can_execute_live_mirror(db, cfg, user_id)
+    return {
+        "ok": bool(ok),
+        "reason": reason,
+        "enabled": bool(cfg.live_mirror_enabled),
+        "dry_run": bool(cfg.dry_run),
+        "live_ctid": cfg.live_ctrader_account_id,
+        "open_live": live_open_position_count(db, user_id) if user_id else 0,
+        "trades_today": live_trades_today(db),
+        "max_trades_day": int(cfg.max_live_trades_day or 0),
+        "phantoms_cleared": cleared,
+    }
+
+
 def live_pnl_today_usd(db, user_id: int) -> float:
     from app.strategy_models import StrategyExecution
 
@@ -405,6 +491,10 @@ def check_can_execute_live_mirror(db, cfg: GeminiGoldRuntimeConfig, user_id: int
         return False, "dry_run"
     if not live_account_configured(cfg):
         return False, "live_account_not_configured"
+    try:
+        clear_stale_live_mirror_phantoms(db, user_id)
+    except Exception as exc:
+        logger.warning("[gemini-gold] live mirror phantom clear before check failed: %s", exc)
     if live_trades_today(db) >= cfg.max_live_trades_day:
         return False, "max_live_trades_day"
     if live_open_position_count(db, user_id) >= 1:
