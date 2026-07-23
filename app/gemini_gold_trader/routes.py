@@ -507,6 +507,7 @@ async def api_account(uid: str = Query(...)):
 
 @router.post("/api/gemini-gold-trader/config")
 async def api_update_config(request: Request, uid: str = Query(...)):
+    ensure_gemini_gold_trader_schema()
     db = SessionLocal()
     try:
         admin = _resolve_user(uid, db)
@@ -536,12 +537,28 @@ async def api_update_config(request: Request, uid: str = Query(...)):
                     status_code=400,
                     detail="confirm_real_money required to enable live mirror",
                 )
+            current_mode = str(
+                body.get("execution_mode")
+                or getattr(row, "execution_mode", EXECUTION_MODE_DEMO)
+                or EXECUTION_MODE_DEMO
+            ).strip().lower()
+            if current_mode == EXECUTION_MODE_LIVE:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Switch to demo execution mode before enabling live mirror",
+                )
             live_ctid = body.get("live_ctrader_account_id") or row.live_ctrader_account_id
             if not live_ctid:
                 raise HTTPException(
                     status_code=400,
                     detail="live_ctrader_account_id required to enable live mirror",
                 )
+            if trader_uid:
+                live_list = live_accounts_for_user_id(db, trader_uid)
+                try:
+                    validate_live_ctid_allowed(live_list, str(live_ctid))
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=str(e)) from e
 
         if "execution_mode" in body:
             mode = str(body.get("execution_mode") or EXECUTION_MODE_DEMO).strip().lower()
@@ -637,7 +654,12 @@ async def api_update_config(request: Request, uid: str = Query(...)):
 
         row.updated_at = datetime.utcnow()
         db.commit()
-        return {"ok": True}
+        cfg_after = merge_config(row, env)
+        return {
+            "ok": True,
+            "live_mirror_enabled": cfg_after.live_mirror_enabled,
+            "config": _config_payload(cfg_after, row, env),
+        }
     finally:
         db.close()
 
@@ -645,6 +667,7 @@ async def api_update_config(request: Request, uid: str = Query(...)):
 @router.post("/api/gemini-gold-trader/disconnect-live")
 async def api_disconnect_live(uid: str = Query(...)):
     """Disable live mirror only — demo trader keeps running."""
+    ensure_gemini_gold_trader_schema()
     db = SessionLocal()
     try:
         _resolve_user(uid, db)
