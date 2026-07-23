@@ -626,16 +626,17 @@ async def execute_live_mirror_take(
     # the hint; live must use that same hint (not the demo fill price).
     # `entry` from _parse_prices is that decision entry.
 
-    volume_units: Optional[int] = None
-    try:
-        if demo_ex.broker_volume_units and int(demo_ex.broker_volume_units) > 0:
-            volume_units = int(demo_ex.broker_volume_units)
-    except (TypeError, ValueError):
-        volume_units = None
+    # Size the live mirror by LOTS — never by the demo's raw broker wire volume.
+    # demo_ex.broker_volume_units is (lots × lotSize) on the DEMO instrument spec
+    # (e.g. 0.01 lot × lotSize 10000 = 100), but place_market_order_resilient's
+    # volume_units argument is treated as CONTRACTS (lots) and multiplied by the
+    # LIVE symbol's lotSize. Reusing the demo wire volume therefore blew the live
+    # order up by orders of magnitude — demo 0.01 lot / vol=100 became live
+    # "100 contracts" / vol=200000 (~100 lots), which the broker rejects with
+    # NOT_ENOUGH_MONEY. Mirror the configured live lot size (falling back to the
+    # demo lot size) so the live account computes the correct wire volume for its
+    # own instrument spec.
     lots = max(0.01, float(cfg.live_lot_size or cfg.demo_lot_size or 0.01))
-    if volume_units:
-        # Prefer exact demo wire volume so lot size matches on the live account.
-        lots = None  # type: ignore[assignment]
 
     strategy_id = await run_in_db_thread(
         ensure_system_strategy, db, user.id, live_mirror=True
@@ -657,11 +658,8 @@ async def execute_live_mirror_take(
         label="GeminiGoldLiveMirror",
         latency=latency,
         execution_id=decision_id,
+        volume_lots=lots,
     )
-    if volume_units:
-        place_kwargs["volume_units"] = volume_units
-    else:
-        place_kwargs["volume_lots"] = lots
     result = await place_market_order_resilient(**place_kwargs)
     try:
         latency.log_summary(outcome="fill" if result and result.get("actual_fill") else "fail")
@@ -695,8 +693,6 @@ async def execute_live_mirror_take(
             broker_units_i = int(broker_units)
     except Exception:
         broker_units_i = None
-    if broker_units_i is None and volume_units:
-        broker_units_i = volume_units
 
     note = (
         f"gemini_gold_trader_live_mirror decision_id={decision_id} "
