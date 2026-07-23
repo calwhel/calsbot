@@ -516,8 +516,6 @@ async def execute_live_mirror_take(
         return None
     direction, entry, sl, tp = parsed
 
-    # Prefer the demo fill as the signal price so relative SL/TP match what
-    # just filled on demo (avoids entry drift vs chart mid).
     def _load_demo_ex(db_sess):
         return (
             db_sess.query(StrategyExecution)
@@ -526,13 +524,42 @@ async def execute_live_mirror_take(
         )
 
     demo_ex = await run_in_db_thread(_load_demo_ex, db)
-    if demo_ex and demo_ex.entry_price:
-        try:
-            entry = float(demo_ex.entry_price)
-        except (TypeError, ValueError):
-            pass
+    if not demo_ex:
+        logger.warning(
+            "[gemini-gold] live mirror: demo execution %s missing", demo_execution_id
+        )
+        return None
 
-    lots = max(0.01, float(cfg.live_lot_size or 0.01))
+    # Exact copy of what demo traded — do NOT recompute from a different entry
+    # hint. Market SL/TP are relative to entry_price; using demo fill as the
+    # hint previously changed relative distances vs the demo order.
+    demo_dir = (demo_ex.direction or "").upper()
+    if demo_dir in ("LONG", "SHORT"):
+        direction = demo_dir
+    try:
+        if demo_ex.sl_price:
+            sl = float(demo_ex.sl_price)
+        if demo_ex.tp_price:
+            tp = float(demo_ex.tp_price)
+    except (TypeError, ValueError):
+        pass
+
+    # Keep the same absolute SL/TP geometry relative to fill as demo:
+    # relative_R = |decision_entry - sl|. Demo placed with decision entry as
+    # the hint; live must use that same hint (not the demo fill price).
+    # `entry` from _parse_prices is that decision entry.
+
+    volume_units: Optional[int] = None
+    try:
+        if demo_ex.broker_volume_units and int(demo_ex.broker_volume_units) > 0:
+            volume_units = int(demo_ex.broker_volume_units)
+    except (TypeError, ValueError):
+        volume_units = None
+    lots = max(0.01, float(cfg.live_lot_size or cfg.demo_lot_size or 0.01))
+    if volume_units:
+        # Prefer exact demo wire volume so lot size matches on the live account.
+        lots = None  # type: ignore[assignment]
+
     strategy_id = await run_in_db_thread(
         ensure_system_strategy, db, user.id, live_mirror=True
     )
@@ -540,14 +567,13 @@ async def execute_live_mirror_take(
     latency = new_order_latency(decision_id, signal_mono=time.monotonic())
     latency.mark_queued()
     latency.mark_dequeue()
-    result = await place_market_order_resilient(
+    place_kwargs = dict(
         user_id=user.id,
         access_token=prefs.ctrader_access_token,
         ctid=ctid,
         prefs=prefs,
         symbol_name=SYMBOL,
         direction=direction,
-        volume_lots=lots,
         stop_loss_price=sl,
         take_profit_price=tp,
         entry_price=entry,
@@ -555,6 +581,11 @@ async def execute_live_mirror_take(
         latency=latency,
         execution_id=decision_id,
     )
+    if volume_units:
+        place_kwargs["volume_units"] = volume_units
+    else:
+        place_kwargs["volume_lots"] = lots
+    result = await place_market_order_resilient(**place_kwargs)
     try:
         latency.log_summary(outcome="fill" if result and result.get("actual_fill") else "fail")
     except Exception:
@@ -587,6 +618,8 @@ async def execute_live_mirror_take(
             broker_units_i = int(broker_units)
     except Exception:
         broker_units_i = None
+    if broker_units_i is None and volume_units:
+        broker_units_i = volume_units
 
     note = (
         f"gemini_gold_trader_live_mirror decision_id={decision_id} "
@@ -598,6 +631,7 @@ async def execute_live_mirror_take(
     note += f" | pos={position_id}"
     if broker_units_i and broker_units_i > 0:
         note += f" | vol={broker_units_i}"
+    note += f" | copy_sl={sl} copy_tp={tp} copy_entry_hint={entry}"
 
     ex = StrategyExecution(
         strategy_id=strategy_id,
@@ -622,19 +656,29 @@ async def execute_live_mirror_take(
             "gemini_gold_decision_id": decision_id,
             "gemini_gold_live_mirror": True,
             "demo_execution_id": demo_execution_id,
+            "copied_direction": direction,
+            "copied_sl": sl,
+            "copied_tp": tp,
+            "copied_entry_hint": entry,
+            "copied_volume_units": broker_units_i,
         },
     )
     db.add(ex)
     await db_commit(db)
     await run_in_db_thread(db.refresh, ex)
     logger.info(
-        "[gemini-gold] LIVE MIRROR filled exec=%s ctid=%s %s %s @ %s lots=%s decision=%s",
+        "[gemini-gold] LIVE MIRROR filled exec=%s ctid=%s %s %s @ %s "
+        "sl=%s tp=%s vol=%s (exact copy of demo_exec=%s entry_hint=%s) decision=%s",
         ex.id,
         ctid,
         direction,
         SYMBOL,
         fill,
-        lots,
+        sl,
+        tp,
+        broker_units_i or lots,
+        demo_execution_id,
+        entry,
         decision_id,
     )
     return ex.id

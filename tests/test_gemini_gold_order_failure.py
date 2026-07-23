@@ -54,6 +54,10 @@ def test_live_mirror_places_directly_not_via_queue():
     assert 'label="GeminiGoldLiveMirror"' in EXECUTOR
     assert "LIVE MIRROR filled" in EXECUTOR
     assert 'status="filled"' in EXECUTOR
+    assert "exact copy of demo_exec" in EXECUTOR
+    assert "copy_sl=" in EXECUTOR
+    # Must NOT use demo fill as the relative SL/TP entry hint
+    assert "Prefer the demo fill as the signal price" not in EXECUTOR
 
 
 def test_ensure_system_strategy_uses_valid_user_strategy_fields():
