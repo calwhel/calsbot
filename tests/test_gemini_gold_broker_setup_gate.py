@@ -108,3 +108,161 @@ def test_broker_preflight_timeout():
         assert reason == "ctrader_poll_timeout"
 
     asyncio.run(_run())
+
+
+def _exec_cfg():
+    cfg = env_defaults()
+    return cfg.__class__(
+        **{
+            **cfg.__dict__,
+            "demo_user_id": 5,
+            "demo_ctrader_account_id": "47782488",
+        }
+    )
+
+
+def test_snapshot_is_reusable_fresh_and_stale():
+    import time as _t
+
+    from app.gemini_gold_trader.broker_preflight import snapshot_is_reusable
+
+    snap = {"position_ids": {1, 2}}
+    now = _t.monotonic()
+    assert snapshot_is_reusable(snap, now, ttl_s=150) is True
+    assert snapshot_is_reusable(snap, now - 400, ttl_s=150) is False
+    assert snapshot_is_reusable({"position_ids": None}, now, ttl_s=150) is False
+    assert snapshot_is_reusable(None, now, ttl_s=150) is False
+    assert snapshot_is_reusable(snap, None, ttl_s=150) is False
+
+
+def test_broker_preflight_reuses_fresh_cached_snapshot():
+    """A fresh scan-start snapshot avoids a second broker poll entirely."""
+    import time as _t
+
+    from app.gemini_gold_trader.broker_preflight import broker_reachable_for_execution
+
+    cfg = _exec_cfg()
+    db = MagicMock()
+    poll = AsyncMock()
+
+    async def _run():
+        with patch(
+            "app.services.ctrader_client.get_broker_reconcile_snapshot_resilient",
+            new=poll,
+        ):
+            ok, reason, snap = await broker_reachable_for_execution(
+                db,
+                cfg,
+                user_id=5,
+                cached_snapshot={"position_ids": {7}},
+                cached_at=_t.monotonic(),
+            )
+        assert ok is True
+        assert reason == "ok_cached"
+        assert snap == {"position_ids": {7}}
+        poll.assert_not_awaited()
+
+    asyncio.run(_run())
+
+
+def test_broker_preflight_falls_back_to_cache_on_timeout():
+    """A live poll timeout falls back to a still-fresh cached snapshot."""
+    import time as _t
+
+    from app.gemini_gold_trader.broker_preflight import broker_reachable_for_execution
+
+    cfg = _exec_cfg()
+    db = MagicMock()
+    prefs = MagicMock()
+    prefs.ctrader_access_token = "tok"
+    db.query.return_value.filter.return_value.first.return_value = prefs
+
+    async def _slow(*a, **k):
+        await asyncio.sleep(5)
+        return {"position_ids": set()}
+
+    async def _run():
+        with patch(
+            "app.services.ctrader_client.get_broker_reconcile_snapshot_resilient",
+            new=AsyncMock(side_effect=_slow),
+        ), patch(
+            "app.gemini_gold_trader.broker_preflight._EXEC_BROKER_TIMEOUT_S",
+            0.05,
+        ):
+            ok, reason, snap = await broker_reachable_for_execution(
+                db,
+                cfg,
+                user_id=5,
+                cached_snapshot={"position_ids": {9}},
+                cached_at=_t.monotonic() - 60,
+            )
+        assert ok is True
+        assert reason == "ok_cached_after_timeout"
+        assert snap == {"position_ids": {9}}
+
+    asyncio.run(_run())
+
+
+def test_broker_preflight_lightweight_uses_positions_poll():
+    """lightweight=True calls the positions-only poll, not the full reconcile."""
+    from app.gemini_gold_trader.broker_preflight import broker_reachable_for_execution
+
+    cfg = _exec_cfg()
+    db = MagicMock()
+    prefs = MagicMock()
+    prefs.ctrader_access_token = "tok"
+    db.query.return_value.filter.return_value.first.return_value = prefs
+    light = AsyncMock(return_value={"position_ids": {5}})
+    full = AsyncMock(return_value={"position_ids": {99}})
+
+    async def _run():
+        with patch(
+            "app.services.ctrader_client.get_broker_positions_snapshot_resilient",
+            new=light,
+        ), patch(
+            "app.services.ctrader_client.get_broker_reconcile_snapshot_resilient",
+            new=full,
+        ):
+            ok, reason, snap = await broker_reachable_for_execution(
+                db, cfg, user_id=5, lightweight=True
+            )
+        assert ok is True
+        assert reason == "ok"
+        assert snap == {"position_ids": {5}}
+        light.assert_awaited_once()
+        full.assert_not_awaited()
+
+    asyncio.run(_run())
+
+
+def test_broker_preflight_stale_cache_does_not_bypass():
+    """A stale cached snapshot must not skip the live poll."""
+    import time as _t
+
+    from app.gemini_gold_trader.broker_preflight import broker_reachable_for_execution
+
+    cfg = _exec_cfg()
+    db = MagicMock()
+    prefs = MagicMock()
+    prefs.ctrader_access_token = "tok"
+    db.query.return_value.filter.return_value.first.return_value = prefs
+    poll = AsyncMock(return_value={"position_ids": {3}})
+
+    async def _run():
+        with patch(
+            "app.services.ctrader_client.get_broker_reconcile_snapshot_resilient",
+            new=poll,
+        ):
+            ok, reason, snap = await broker_reachable_for_execution(
+                db,
+                cfg,
+                user_id=5,
+                cached_snapshot={"position_ids": {9}},
+                cached_at=_t.monotonic() - 10_000,
+            )
+        assert ok is True
+        assert reason == "ok"
+        assert snap == {"position_ids": {3}}
+        poll.assert_awaited_once()
+
+    asyncio.run(_run())
