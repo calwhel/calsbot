@@ -698,6 +698,29 @@ async def _get_ticker_suffix() -> str:
     return f"\n\n{tickers}" if tickers else ""
 
 
+async def _attach_coin_chart_media(account_poster, symbol: str, change: float, price: float):
+    """Generate + upload a coin chart for TA posts. Returns media_ids or None."""
+    try:
+        from app.services.chart_generator import generate_coin_chart
+        chart_bytes = await generate_coin_chart(symbol, change, price)
+        if not chart_bytes:
+            return None
+        media_id = None
+        if hasattr(account_poster, 'upload_media'):
+            uploaded = account_poster.upload_media(chart_bytes)
+            # MultiAccountPoster.upload_media is sync; TwitterPoster.upload_media is async
+            if asyncio.iscoroutine(uploaded):
+                media_id = await uploaded
+            else:
+                media_id = uploaded
+        if media_id:
+            logger.info(f"📈 Chart attached for ${symbol}")
+            return [media_id]
+    except Exception as e:
+        logger.warning(f"Chart attach failed for ${symbol}: {e}")
+    return None
+
+
 def _sanitize_tickers(text: str, expected_symbol: str) -> str:
     """
     Strip cashtags that don't belong — remove $ prefix from any ticker
@@ -2435,9 +2458,8 @@ def migrate_env_account_to_database():
                 account.set_post_types([
                     'featured_coin', 'market_summary', 'top_gainers', 'btc_update',
                     'altcoin_movers', 'quick_ta', 'daily_recap', 'bitunix_signup',
-                    'bitunix_campaign', 'yubit_campaign', 'bydfi_campaign',
-                    'tradehub_promo', 'early_gainer', 'memecoin', 'market_take',
-                    'free_telegram', 'top_gainer_ta',
+                    'bitunix_campaign', 'tradehub_promo', 'early_gainer', 'memecoin',
+                    'market_take', 'free_telegram', 'top_gainer_ta', 'high_viewing',
                 ])
                 db.commit()
                 logger.info("✅ Set default post types for ccally")
@@ -2484,7 +2506,7 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
                    'altcoin_movers', 'daily_recap', 'top_losers', 'early_gainer',
                    'memecoin', 'quick_ta', 'tradehub_promo', 'market_take',
                    'bitunix_signup', 'bitunix_campaign', 'yubit_campaign',
-                   'bydfi_campaign', 'free_telegram', 'top_gainer_ta']
+                   'bydfi_campaign', 'free_telegram', 'top_gainer_ta', 'high_viewing']
     
     # Validate post types
     invalid = [t for t in post_types if t not in valid_types]
@@ -2511,15 +2533,18 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
 
 POST_SCHEDULE = [
     # (hour_utc, minute, post_type)
-    # Evergreen Bitunix affiliate signups + market TA for discoverability.
-    # Time-boxed BYDFi/Yubit/Bitunix deposit campaigns ended Apr 2026.
-    (7, 0,   'top_gainer_ta'),      # Asia morning — engagement
-    (9, 15,  'bitunix_signup'),     # EU morning — Bitunix referral
-    (12, 30, 'top_gainer_ta'),      # EU midday — engagement
-    (14, 0,  'bitunix_signup'),     # EU/US overlap — Bitunix referral
-    (17, 45, 'top_gainer_ta'),      # US open — engagement
-    (19, 0,  'bitunix_signup'),     # US afternoon — Bitunix referral
-    (21, 30, 'bitunix_signup'),     # US evening — Bitunix referral
+    # Influencer-first mix (~80% value / ~20% soft Bitunix).
+    # Value posts drive views; soft signup slots are trader-voice, not promo walls.
+    (6, 30,  'early_gainer'),       # Asia — early mover FOMO
+    (8, 0,   'top_gainer_ta'),      # Asia — top gainer TA (+ chart)
+    (10, 15, 'memecoin'),           # EU morning — meme / cashtag discovery
+    (12, 0,  'market_take'),        # Midday — KOL opinion (saves/reposts)
+    (13, 45, 'bitunix_signup'),     # Soft Bitunix #1 (after value stretch)
+    (15, 30, 'quick_ta'),           # EU/US — quick TA (+ chart)
+    (17, 30, 'top_gainer_ta'),      # US open — chart TA (highest CT traffic)
+    (19, 0,  'high_viewing'),       # US afternoon — viral / extreme movers
+    (20, 45, 'bitunix_signup'),     # Soft Bitunix #2
+    (22, 15, 'altcoin_movers'),     # Evening watchlist
 ]
 
 
@@ -4224,9 +4249,7 @@ $ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
             return await post_quick_ta(account_poster, main_poster)
         
         elif post_type == 'tradehub_promo':
-            # Keep Bitunix referral in the mix on promo slots (~1 in 3).
-            if random.random() < 0.33:
-                return await post_bitunix_signup(account_poster)
+            # Pure market edu — Bitunix only via dedicated soft signup slots.
             return await post_tradehub_promo(account_poster)
 
         elif post_type == 'market_take':
@@ -5426,8 +5449,7 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
 
         volume = coin.get('volume', 0)
 
-        # AI-generated card images disabled — text-only posts
-        ta_media_ids = None
+        ta_media_ids = await _attach_coin_chart_media(account_poster, symbol, change, price)
 
         # Build coin data for AI generation — pass TA if available
         coin_data_for_ai = {
@@ -5442,9 +5464,6 @@ async def post_quick_ta(account_poster: MultiAccountPoster, main_poster) -> Opti
             tweet_text = f"${symbol} {sign}{change:.1f}% at {price_str}. chart caught my eye."
 
         tweet_text = tweet_text + _get_hashtag_style()
-        _yd = _maybe_yubit_drop()
-        if _yd and (len(tweet_text + _yd) - 32) <= 280:  # -32 corrects for t.co URL shortening
-            tweet_text = tweet_text + _yd
         tweet_text = await _ai_review_tweet(tweet_text, 'quick_ta', {
             'symbol': symbol, 'change': f'{sign}{change:.1f}%', 'price': price_str,
             'rsi': chart_analysis['rsi'] if chart_analysis else 'not computed',
@@ -5741,9 +5760,13 @@ Analytical angle for this tweet: {angle['instruction']}"""
             'angle': angle['id'], 'rsi': rsi_val, 'trend': trend,
         })
 
-        result = account_poster.post_tweet(tweet_text)
+        media_ids = await _attach_coin_chart_media(account_poster, symbol, change, price)
+        result = account_poster.post_tweet(tweet_text, media_ids=media_ids)
         if result and result.get('success'):
-            logger.info(f"✅ TopGainerTA [{angle['id']}] ${symbol} {sign}{change:.1f}% posted")
+            logger.info(
+                f"✅ TopGainerTA [{angle['id']}] ${symbol} {sign}{change:.1f}% posted"
+                f"{' +chart' if media_ids else ''}"
+            )
 
         return result
 
@@ -5820,68 +5843,61 @@ BITUNIX_SIGNUP_LINK = os.environ.get(
     "https://www.bitunix.com/register?vipCode=tradehubsave",
 ).strip() or "https://www.bitunix.com/register?vipCode=tradehubsave"
 
+# Soft trader-voice CTAs — lead with the market, Bitunix is where you execute.
+# No deposit bonuses, slot scarcity, or hard "SIGN UP NOW" walls.
 BITUNIX_SIGNUP_TEMPLATES = [
     {
-        'id': 'perps_home',
-        'text': """trading {ticker1} {ticker2} perps?
+        'id': 'execute_here',
+        'text': """{ticker1} {pct1}% today, {ticker2} not far behind
 
-i run mine on Bitunix — fees are fine and the UI doesn't fight you
+been running these on Bitunix lately — book feels clean for USDT-M
 
-sign up with my link if you're switching / starting fresh:
 {link}""",
     },
     {
-        'id': 'mover_hook',
-        'text': """{ticker1} {pct1}% and {ticker2} {pct2}% today
+        'id': 'same_venue',
+        'text': """watching {ticker1} {ticker2} {ticker3} for entries
 
-if you're hopping into these moves, Bitunix is where i place them
-
-register here (VIP code applied):
+i place the actual trades on Bitunix if anyone's looking for the same venue
 {link}""",
     },
     {
-        'id': 'simple_cta',
-        'text': """need a futures exchange that just works for {ticker1} {ticker2} {ticker3}
+        'id': 'fees_aside',
+        'text': """not gonna do a whole pitch but if you're grinding {ticker1} perps, Bitunix has been fine for me
 
-Bitunix. use my signup link — code is already on it:
 {link}""",
     },
     {
-        'id': 'new_trader',
-        'text': """new to crypto futures?
+        'id': 'hop_in',
+        'text': """{ticker1} ripping {pct1}% — if you're hopping into this one i execute on Bitunix
 
-Bitunix is the exchange i point people to for {ticker1} / {ticker2} perps
-
-sign up → {link}""",
-    },
-    {
-        'id': 'volume_trader',
-        'text': """if you're already grinding volume on {ticker1} {ticker2}, run it on Bitunix under my link
-
-keeps everything in one place and you get the VIP code auto-applied:
 {link}""",
     },
     {
-        'id': 'watchlist_cta',
-        'text': """watchlist: {ticker1} {ticker2} {ticker3}
+        'id': 'quiet_rec',
+        'text': """quiet rec: Bitunix is where my {ticker1} / {ticker2} size sits right now
 
-i execute on Bitunix. if you want the same venue, signup with code applied:
 {link}""",
     },
     {
-        'id': 'low_friction',
-        'text': """stop bouncing between CEXs for every {ticker1} scalp
+        'id': 'no_bounce',
+        'text': """stopped bouncing CEXs every time {ticker1} moves. just use Bitunix
 
-Bitunix signup (my referral / VIP applied):
 {link}""",
     },
     {
-        'id': 'direct',
-        'text': """Bitunix futures — my referral link with VIP code:
+        'id': 'trader_aside',
+        'text': """{ticker1} and {ticker2} both moving
 
-{link}
+aside — if you need a futures book, this is the one i use
+{link}""",
+    },
+    {
+        'id': 'chart_then_venue',
+        'text': """chart on {ticker1} looks alive today ({pct1}%)
 
-good for {ticker1} {ticker2} if you're looking for a clean USDT-M book""",
+trading it on Bitunix if you want the same setup
+{link}""",
     },
 ]
 
@@ -7064,18 +7080,20 @@ async def post_bitunix_signup(account_poster) -> Optional[Dict]:
         tweet_text = await _ai_review_tweet(tweet_text, 'bitunix_signup', {
             'template': template['id'],
             'exchange': 'Bitunix',
-            'goal': 'drive Bitunix signups via referral link',
+            'goal': 'soft trader-voice Bitunix mention that still includes the referral link',
             'link': BITUNIX_SIGNUP_LINK,
             'style_note': (
-                'Keep lowercase and casual. No em dashes. Keep the Bitunix '
-                'signup link and any dollar/% figures intact. Do not invent '
-                'deposit bonuses or end dates.'
+                'Sound like a crypto twitter trader, not an affiliate marketer. '
+                'Lowercase, casual, no em dashes, no emojis, no "sign up now", '
+                'no deposit bonuses, no slot scarcity, no VIP hard-sell. '
+                'Keep the Bitunix link and any %/ticker figures intact. '
+                'Lead with the market move; Bitunix is a side mention.'
             ),
         })
 
         result = account_poster.post_tweet(tweet_text)
         if result and result.get('success'):
-            logger.info(f"Bitunix signup tweet posted (template: {template['id']})")
+            logger.info(f"Soft Bitunix signup tweet posted (template: {template['id']})")
         return result
 
     except Exception as e:

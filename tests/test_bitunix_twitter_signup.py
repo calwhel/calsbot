@@ -1,4 +1,4 @@
-"""Bitunix evergreen signup auto-post — schedule + gating."""
+"""Influencer-first X auto-post + soft Bitunix signup."""
 import os
 import sys
 import types
@@ -7,17 +7,34 @@ from datetime import datetime
 from unittest import mock
 
 
-class TestBitunixTwitterSignup(unittest.TestCase):
-    def test_schedule_targets_bitunix_signup_not_expired_campaigns(self):
+class TestInfluencerSchedule(unittest.TestCase):
+    def test_schedule_is_influencer_first_with_soft_bitunix(self):
         from app.services import twitter_poster as tw
 
         types = [pt for _, _, pt in tw.POST_SCHEDULE]
-        self.assertIn("bitunix_signup", types)
-        self.assertGreaterEqual(types.count("bitunix_signup"), 3)
+        soft = types.count("bitunix_signup")
+        value = len(types) - soft
+
+        self.assertEqual(soft, 2, "exactly 2 soft Bitunix slots/day")
+        self.assertGreaterEqual(value, 7, "majority of slots are value/influencer content")
         self.assertNotIn("bydfi_campaign", types)
         self.assertNotIn("yubit_campaign", types)
-        # Engagement slots still present so the feed isn't pure promo
-        self.assertIn("top_gainer_ta", types)
+
+        # Core view-driving formats present
+        for needed in (
+            "top_gainer_ta",
+            "early_gainer",
+            "memecoin",
+            "market_take",
+            "quick_ta",
+            "high_viewing",
+            "altcoin_movers",
+        ):
+            self.assertIn(needed, types)
+
+        # Soft CTAs are not clustered at the start of the day
+        first_soft_idx = types.index("bitunix_signup")
+        self.assertGreaterEqual(first_soft_idx, 3)
 
     def test_deposit_campaign_window_has_ended(self):
         from app.services import twitter_poster as tw
@@ -26,6 +43,23 @@ class TestBitunixTwitterSignup(unittest.TestCase):
         self.assertTrue(now > tw.BITUNIX_CAMPAIGN_END)
         self.assertTrue(now > tw.BYDFI_CAMPAIGN_END)
         self.assertTrue(now > tw.YUBIT_CAMPAIGN_END)
+
+    def test_signup_templates_are_soft_not_hard_promo(self):
+        from app.services import twitter_poster as tw
+
+        blob = " ".join(t["text"].lower() for t in tw.BITUNIX_SIGNUP_TEMPLATES)
+        self.assertIn("bitunix", blob)
+        self.assertIn("{link}", blob)
+        for banned in (
+            "sign up now",
+            "deposit bonus",
+            "slots",
+            "first come",
+            "voucher",
+            "vip code applied",
+            "register here",
+        ):
+            self.assertNotIn(banned, blob)
 
     def test_signup_link_uses_referral_env(self):
         from app.services import twitter_poster as tw
@@ -73,6 +107,8 @@ class TestBitunixTwitterSignup(unittest.TestCase):
         added = account.set_post_types.call_args[0][0]
         self.assertIn("bitunix_signup", added)
         self.assertIn("top_gainer_ta", added)
+        self.assertIn("high_viewing", added)
+        self.assertIn("market_take", added)
         self.assertIn("bydfi_campaign", added)  # preserves existing
         db.commit.assert_called_once()
 
@@ -129,6 +165,27 @@ class TestPostBitunixSignup(unittest.IsolatedAsyncioTestCase):
 
         signup.assert_awaited_once()
         self.assertEqual(result["tweet_id"], "9")
+
+    async def test_tradehub_promo_no_longer_hijacks_to_bitunix(self):
+        from app.services import twitter_poster as tw
+
+        account_poster = mock.Mock()
+        main_poster = mock.Mock()
+
+        with mock.patch.object(
+            tw,
+            "post_tradehub_promo",
+            new=mock.AsyncMock(return_value={"success": True, "tweet_id": "edu"}),
+        ) as edu, mock.patch.object(
+            tw, "post_bitunix_signup", new=mock.AsyncMock()
+        ) as signup:
+            result = await tw.post_with_account(
+                account_poster, main_poster, "tradehub_promo"
+            )
+
+        edu.assert_awaited_once()
+        signup.assert_not_awaited()
+        self.assertEqual(result["tweet_id"], "edu")
 
 
 if __name__ == "__main__":
