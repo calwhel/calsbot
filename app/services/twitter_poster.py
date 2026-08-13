@@ -168,6 +168,27 @@ def _twitter_credentials_configured() -> bool:
     )
 
 
+def _has_postable_twitter_accounts() -> bool:
+    """True when at least one active DB account has OAuth keys (env optional)."""
+    try:
+        for account in get_all_twitter_accounts():
+            if (
+                (getattr(account, "consumer_key", None) or "").strip()
+                and (getattr(account, "consumer_secret", None) or "").strip()
+                and (getattr(account, "access_token", None) or "").strip()
+                and (getattr(account, "access_token_secret", None) or "").strip()
+            ):
+                return True
+    except Exception as e:
+        logger.debug(f"[twitter] DB account credential probe failed: {e}")
+    return False
+
+
+def _twitter_ready_to_post() -> bool:
+    """Env OAuth/bearer OR active DB accounts with keys."""
+    return _twitter_credentials_configured() or _has_postable_twitter_accounts()
+
+
 def _log_twitter_poster_disabled(reason: str) -> None:
     global _TWITTER_DISABLED_LOGGED
     if _TWITTER_DISABLED_LOGGED:
@@ -177,7 +198,7 @@ def _log_twitter_poster_disabled(reason: str) -> None:
 
 
 def twitter_poster_active() -> bool:
-    return TWITTER_ENABLED and _twitter_credentials_configured()
+    return TWITTER_ENABLED and _twitter_ready_to_post()
 
 
 # Posting limits - 25 posts per day (20 regular + 4 campaign + 1 buffer)
@@ -2413,9 +2434,10 @@ def migrate_env_account_to_database():
             if account:
                 account.set_post_types([
                     'featured_coin', 'market_summary', 'top_gainers', 'btc_update',
-                    'altcoin_movers', 'quick_ta', 'daily_recap', 'bitunix_campaign',
-                    'yubit_campaign', 'bydfi_campaign', 'tradehub_promo', 'early_gainer', 'memecoin',
-                    'market_take', 'free_telegram',
+                    'altcoin_movers', 'quick_ta', 'daily_recap', 'bitunix_signup',
+                    'bitunix_campaign', 'yubit_campaign', 'bydfi_campaign',
+                    'tradehub_promo', 'early_gainer', 'memecoin', 'market_take',
+                    'free_telegram', 'top_gainer_ta',
                 ])
                 db.commit()
                 logger.info("✅ Set default post types for ccally")
@@ -2461,7 +2483,8 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
     valid_types = ['featured_coin', 'market_summary', 'top_gainers', 'btc_update',
                    'altcoin_movers', 'daily_recap', 'top_losers', 'early_gainer',
                    'memecoin', 'quick_ta', 'tradehub_promo', 'market_take',
-                   'bitunix_campaign', 'yubit_campaign', 'bydfi_campaign', 'free_telegram']
+                   'bitunix_signup', 'bitunix_campaign', 'yubit_campaign',
+                   'bydfi_campaign', 'free_telegram', 'top_gainer_ta']
     
     # Validate post types
     invalid = [t for t in post_types if t not in valid_types]
@@ -2488,13 +2511,56 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
 
 POST_SCHEDULE = [
     # (hour_utc, minute, post_type)
-    (7, 0,   'top_gainer_ta'),      # Asia morning — top gainer TA
-    (9, 15,  'bydfi_campaign'),     # BYDFi $2000 bonus — EU morning slot
-    (12, 30, 'top_gainer_ta'),      # EU midday — top gainer TA
-    (14, 0,  'bydfi_campaign'),     # BYDFi $2000 bonus — EU/US overlap
-    (17, 45, 'top_gainer_ta'),      # US open — top gainer TA
-    (19, 0,  'bydfi_campaign'),     # BYDFi $2000 bonus — US afternoon slot
+    # Evergreen Bitunix affiliate signups + market TA for discoverability.
+    # Time-boxed BYDFi/Yubit/Bitunix deposit campaigns ended Apr 2026.
+    (7, 0,   'top_gainer_ta'),      # Asia morning — engagement
+    (9, 15,  'bitunix_signup'),     # EU morning — Bitunix referral
+    (12, 30, 'top_gainer_ta'),      # EU midday — engagement
+    (14, 0,  'bitunix_signup'),     # EU/US overlap — Bitunix referral
+    (17, 45, 'top_gainer_ta'),      # US open — engagement
+    (19, 0,  'bitunix_signup'),     # US afternoon — Bitunix referral
+    (21, 30, 'bitunix_signup'),     # US evening — Bitunix referral
 ]
+
+
+def ensure_accounts_cover_schedule() -> None:
+    """Add any scheduled post types missing from active accounts.
+
+    Without this, a schedule change (e.g. bitunix_signup / top_gainer_ta)
+    silently no-ops because accounts still only list older campaign types.
+    """
+    needed = [pt for _, _, pt in POST_SCHEDULE]
+    # Preserve order, unique
+    seen = set()
+    ordered_needed = []
+    for pt in needed:
+        if pt not in seen:
+            seen.add(pt)
+            ordered_needed.append(pt)
+
+    from app.database import SessionLocal
+    from app.models import TwitterAccount
+
+    db = SessionLocal()
+    try:
+        accounts = db.query(TwitterAccount).filter(TwitterAccount.is_active == True).all()
+        changed = False
+        for account in accounts:
+            current = account.get_post_types()
+            missing = [t for t in ordered_needed if t not in current]
+            if missing:
+                account.set_post_types(current + missing)
+                changed = True
+                logger.info(
+                    f"🐦 Ensured schedule post types on {account.name}: added {missing}"
+                )
+        if changed:
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning(f"Could not ensure schedule post types: {e}")
+    finally:
+        db.close()
 
 POSTED_SLOTS = set()
 LAST_POSTED_DAY = None
@@ -3550,6 +3616,7 @@ def get_twitter_schedule() -> Dict:
         'memecoin': '🐸 Trending Memecoin',
         'quick_ta': '📊 Quick TA',
         'high_viewing': '🔥 High Viewing',
+        'bitunix_signup': '🔗 Bitunix Signup',
         'bitunix_campaign': '💰 Bitunix Campaign',
         'yubit_campaign': '💰 Yubit Campaign',
         'bydfi_campaign': '💰 BYDFi Campaign',
@@ -3627,13 +3694,15 @@ async def run_auto_post_loop_singleton():
     transparently takes over.
     """
     if not TWITTER_ENABLED:
-        _log_twitter_poster_disabled("TWITTER_ENABLED=false")
+        _log_twitter_poster_disabled("TWITTER_ENABLED=false (set TWITTER_ENABLED=1 to resume)")
         while True:
             await asyncio.sleep(3600)
         return
 
-    if not _twitter_credentials_configured():
-        _log_twitter_poster_disabled("API credentials not configured")
+    if not _twitter_ready_to_post():
+        _log_twitter_poster_disabled(
+            "no env OAuth/bearer and no active DB twitter accounts with keys"
+        )
         while True:
             await asyncio.sleep(3600)
         return
@@ -3703,15 +3772,21 @@ async def auto_post_loop():
 
     # Wait a bit for database to be ready
     await asyncio.sleep(5)
-    
+
     try:
+        # Schedule may have new types (bitunix_signup) — attach them to existing accounts
+        ensure_accounts_cover_schedule()
+
         # Check for database accounts first
         db_accounts = get_all_twitter_accounts()
-        
+
         if db_accounts:
             logger.info(f"🐦 AUTO-POST: Found {len(db_accounts)} database accounts")
             for acc in db_accounts:
-                logger.info(f"  - Account: {acc.name} (@{acc.handle}), active: {acc.is_active}")
+                logger.info(
+                    f"  - Account: {acc.name} (@{acc.handle}), active: {acc.is_active}, "
+                    f"types: {acc.get_post_types()}"
+                )
         else:
             logger.warning("🐦 AUTO-POST: No database accounts found, checking env vars...")
             # Fall back to environment variable poster
@@ -3721,8 +3796,10 @@ async def auto_post_loop():
                 logger.error("❌ Auto posting disabled - add accounts via /twitter command")
                 return
             logger.info("🐦 AUTO-POST: Using env var account as fallback")
-        
+
         logger.info(f"🐦 AUTO-POST: Schedule has {len(POST_SCHEDULE)} slots per day")
+        for hour, minute, post_type in POST_SCHEDULE:
+            logger.info(f"  - {hour:02d}:{minute:02d} UTC → {post_type}")
         logger.info("🐦 AUTO-POST LOOP STARTED SUCCESSFULLY!")
     except Exception as e:
         logger.error(f"❌ AUTO-POST INIT ERROR: {e}")
@@ -3795,9 +3872,11 @@ async def auto_post_loop():
                     adjusted_minute += 60
                     adjusted_hour = (hour - 1) % 24
                 
-                # Campaign slots get a 30-min catch-up window (survive restarts).
+                # Campaign / signup slots get a 30-min catch-up window (survive restarts).
                 # Regular slots fire within 5 minutes of the adjusted time.
-                _campaign_types = {'yubit_campaign', 'bitunix_campaign', 'bydfi_campaign'}
+                _campaign_types = {
+                    'yubit_campaign', 'bitunix_campaign', 'bydfi_campaign', 'bitunix_signup',
+                }
                 _window_secs = 1800 if post_type in _campaign_types else 300
 
                 slot_time = now.replace(hour=adjusted_hour, minute=adjusted_minute, second=0, microsecond=0)
@@ -4145,19 +4224,23 @@ $ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
             return await post_quick_ta(account_poster, main_poster)
         
         elif post_type == 'tradehub_promo':
-            # While the Bitunix campaign is active, ~1-in-4 promo slots becomes
-            # a campaign tweet. Keeps coverage without flooding the timeline.
-            _now = datetime.utcnow()
-            _campaign_active = BITUNIX_CAMPAIGN_START <= _now <= BITUNIX_CAMPAIGN_END
-            if _campaign_active and random.random() < 0.25:
-                return await post_bitunix_campaign(account_poster)
+            # Keep Bitunix referral in the mix on promo slots (~1 in 3).
+            if random.random() < 0.33:
+                return await post_bitunix_signup(account_poster)
             return await post_tradehub_promo(account_poster)
 
         elif post_type == 'market_take':
             return await post_market_take(account_poster)
 
+        elif post_type == 'bitunix_signup':
+            return await post_bitunix_signup(account_poster)
+
         elif post_type == 'bitunix_campaign':
-            return await post_bitunix_campaign(account_poster)
+            # Time-boxed deposit campaign ended Apr 2026 — fall back to evergreen signup.
+            result = await post_bitunix_campaign(account_poster)
+            if result is None:
+                return await post_bitunix_signup(account_poster)
+            return result
 
         elif post_type == 'yubit_campaign':
             return await post_yubit_campaign(account_poster)
@@ -5731,6 +5814,79 @@ BITUNIX_CAMPAIGN_LINK = "https://www.bitunix.com/activity/basic/1774508484?vipCo
 BITUNIX_CAMPAIGN_START = datetime(2026, 3, 27)
 BITUNIX_CAMPAIGN_END = datetime(2026, 4, 26, 23, 59, 59)
 
+# Evergreen affiliate signup — uses platform referral URL (not the expired Apr 2026 campaign).
+BITUNIX_SIGNUP_LINK = os.environ.get(
+    "BITUNIX_REFERRAL_URL",
+    "https://www.bitunix.com/register?vipCode=tradehubsave",
+).strip() or "https://www.bitunix.com/register?vipCode=tradehubsave"
+
+BITUNIX_SIGNUP_TEMPLATES = [
+    {
+        'id': 'perps_home',
+        'text': """trading {ticker1} {ticker2} perps?
+
+i run mine on Bitunix — fees are fine and the UI doesn't fight you
+
+sign up with my link if you're switching / starting fresh:
+{link}""",
+    },
+    {
+        'id': 'mover_hook',
+        'text': """{ticker1} {pct1}% and {ticker2} {pct2}% today
+
+if you're hopping into these moves, Bitunix is where i place them
+
+register here (VIP code applied):
+{link}""",
+    },
+    {
+        'id': 'simple_cta',
+        'text': """need a futures exchange that just works for {ticker1} {ticker2} {ticker3}
+
+Bitunix. use my signup link — code is already on it:
+{link}""",
+    },
+    {
+        'id': 'new_trader',
+        'text': """new to crypto futures?
+
+Bitunix is the exchange i point people to for {ticker1} / {ticker2} perps
+
+sign up → {link}""",
+    },
+    {
+        'id': 'volume_trader',
+        'text': """if you're already grinding volume on {ticker1} {ticker2}, run it on Bitunix under my link
+
+keeps everything in one place and you get the VIP code auto-applied:
+{link}""",
+    },
+    {
+        'id': 'watchlist_cta',
+        'text': """watchlist: {ticker1} {ticker2} {ticker3}
+
+i execute on Bitunix. if you want the same venue, signup with code applied:
+{link}""",
+    },
+    {
+        'id': 'low_friction',
+        'text': """stop bouncing between CEXs for every {ticker1} scalp
+
+Bitunix signup (my referral / VIP applied):
+{link}""",
+    },
+    {
+        'id': 'direct',
+        'text': """Bitunix futures — my referral link with VIP code:
+
+{link}
+
+good for {ticker1} {ticker2} if you're looking for a clean USDT-M book""",
+    },
+]
+
+_bitunix_signup_post_index = 0
+
 CAMPAIGN_TEMPLATES = [
     {
         'id': 'low_barrier_entry',
@@ -6847,6 +7003,85 @@ async def post_tradehub_promo(account_poster) -> Optional[Dict]:
     except Exception as e:
         logger.error(f"Error posting market edu: {e}")
         return {'success': False, 'error': str(e)}
+
+def _twitter_text_len(text: str) -> int:
+    """Count tweet length the way X does (URLs = 23 chars)."""
+    import re as _re
+    count = 0
+    last = 0
+    for m in _re.finditer(r'https?://\S+', text):
+        count += m.start() - last
+        count += 23
+        last = m.end()
+    count += len(text) - last
+    return count
+
+
+async def post_bitunix_signup(account_poster) -> Optional[Dict]:
+    """Evergreen Bitunix affiliate signup tweet (drives register?vipCode=… links)."""
+    global _bitunix_signup_post_index
+
+    try:
+        template = BITUNIX_SIGNUP_TEMPLATES[
+            _bitunix_signup_post_index % len(BITUNIX_SIGNUP_TEMPLATES)
+        ]
+        _bitunix_signup_post_index += 1
+
+        live_tickers = await get_live_tickers_for_campaign()
+        tweet_text = template['text'].format(
+            link=BITUNIX_SIGNUP_LINK,
+            **live_tickers,
+        )
+
+        if _twitter_text_len(tweet_text) > 280:
+            lines = tweet_text.split('\n')
+            while _twitter_text_len('\n'.join(lines)) > 280 and len(lines) > 3:
+                removed = False
+                for i in range(len(lines) - 1, -1, -1):
+                    if not lines[i].strip():
+                        lines.pop(i)
+                        removed = True
+                        break
+                if not removed:
+                    for i in range(len(lines) - 1, 0, -1):
+                        line = lines[i].strip()
+                        if (
+                            line
+                            and not line.startswith('$')
+                            and not line.startswith('http')
+                            and 'Bitunix' not in line
+                        ):
+                            lines.pop(i)
+                            break
+                    else:
+                        break
+            tweet_text = '\n'.join(lines)
+
+        _tickers_suffix = await _get_ticker_suffix()
+        if _tickers_suffix and _twitter_text_len(tweet_text + _tickers_suffix) <= 280:
+            tweet_text = tweet_text + _tickers_suffix
+
+        tweet_text = await _ai_review_tweet(tweet_text, 'bitunix_signup', {
+            'template': template['id'],
+            'exchange': 'Bitunix',
+            'goal': 'drive Bitunix signups via referral link',
+            'link': BITUNIX_SIGNUP_LINK,
+            'style_note': (
+                'Keep lowercase and casual. No em dashes. Keep the Bitunix '
+                'signup link and any dollar/% figures intact. Do not invent '
+                'deposit bonuses or end dates.'
+            ),
+        })
+
+        result = account_poster.post_tweet(tweet_text)
+        if result and result.get('success'):
+            logger.info(f"Bitunix signup tweet posted (template: {template['id']})")
+        return result
+
+    except Exception as e:
+        logger.error(f"Error posting Bitunix signup tweet: {e}")
+        return {'success': False, 'error': str(e)}
+
 
 async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
     """Post a Bitunix campaign tweet with the campaign image, live tickers, and FOMO"""
