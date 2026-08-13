@@ -2229,8 +2229,13 @@ class MultiAccountPoster:
         except Exception as e:
             logger.error(f"Failed to initialize Twitter account {account.name}: {e}")
     
-    def post_tweet(self, text: str, media_ids: List[str] = None) -> Optional[Dict]:
-        """Post tweet using this account"""
+    def post_tweet(
+        self,
+        text: str,
+        media_ids: List[str] = None,
+        in_reply_to_tweet_id: str = None,
+    ) -> Optional[Dict]:
+        """Post tweet using this account (optionally as a reply)."""
         if not self.client:
             return None
 
@@ -2238,21 +2243,26 @@ class MultiAccountPoster:
         text = _strip_extra_cashtags(text)
 
         try:
+            kwargs = {}
             if media_ids:
-                response = self.client.create_tweet(text=text, media_ids=media_ids)
-            else:
-                response = self.client.create_tweet(text=text)
-            
+                kwargs["media_ids"] = media_ids
+            if in_reply_to_tweet_id:
+                kwargs["in_reply_to_tweet_id"] = str(in_reply_to_tweet_id)
+
+            response = self.client.create_tweet(text=text, **kwargs)
+
             tweet_id = response.data['id']
-            logger.info(f"✅ [{self.name}] Tweet posted: {tweet_id}")
-            
+            kind = "reply" if in_reply_to_tweet_id else "tweet"
+            logger.info(f"✅ [{self.name}] {kind} posted: {tweet_id}")
+
             return {
                 'success': True,
                 'tweet_id': tweet_id,
                 'account': self.name,
-                'text': text[:280] if text else ''
+                'text': text[:280] if text else '',
+                'in_reply_to': str(in_reply_to_tweet_id) if in_reply_to_tweet_id else None,
             }
-            
+
         except Exception as e:
             logger.error(f"[{self.name}] Twitter error: {e}")
             return {'success': False, 'error': str(e), 'account': self.name}
@@ -3706,6 +3716,380 @@ def get_twitter_schedule() -> Dict:
     }
 
 
+# ═══════════════════════════════════════════════════════════════════
+# MOVER AUTO-REPLIES — comment under high-engagement cashtag tweets
+# TA-only, no links / no affiliate CTAs (growth via conversation).
+# ═══════════════════════════════════════════════════════════════════
+
+TWITTER_AUTO_REPLY_ENABLED = os.getenv("TWITTER_AUTO_REPLY_ENABLED", "true").lower() in (
+    "1", "true", "yes",
+)
+MAX_MOVER_REPLIES_PER_DAY = int(os.getenv("TWITTER_AUTO_REPLY_MAX_PER_DAY", "8"))
+MOVER_REPLIES_PER_CYCLE = int(os.getenv("TWITTER_AUTO_REPLY_PER_CYCLE", "2"))
+MOVER_REPLY_CYCLE_SECS = int(os.getenv("TWITTER_AUTO_REPLY_CYCLE_SECS", "2400"))  # 40 min
+MOVER_REPLY_MIN_LIKES = int(os.getenv("TWITTER_AUTO_REPLY_MIN_LIKES", "25"))
+
+_MOVER_REPLY_TABLE_READY = False
+_own_x_user_ids: Dict[str, str] = {}  # account_name -> x user id
+
+
+def _ensure_mover_replies_table() -> None:
+    global _MOVER_REPLY_TABLE_READY
+    if _MOVER_REPLY_TABLE_READY:
+        return
+    try:
+        import psycopg2
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return
+        conn = psycopg2.connect(url)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS twitter_mover_replies (
+                id              SERIAL PRIMARY KEY,
+                parent_tweet_id TEXT UNIQUE NOT NULL,
+                reply_tweet_id  TEXT,
+                account_name    TEXT NOT NULL,
+                symbol          TEXT,
+                parent_likes    INTEGER,
+                reply_text      TEXT,
+                created_at      TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_mover_replies_day
+            ON twitter_mover_replies (created_at DESC)
+        """)
+        cur.close()
+        conn.close()
+        _MOVER_REPLY_TABLE_READY = True
+    except Exception as e:
+        logger.warning(f"Could not ensure twitter_mover_replies table: {e}")
+
+
+def _mover_replies_today_count() -> int:
+    try:
+        import psycopg2
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return 0
+        conn = psycopg2.connect(url)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*) FROM twitter_mover_replies
+            WHERE created_at >= date_trunc('day', NOW() AT TIME ZONE 'UTC')
+        """)
+        n = int(cur.fetchone()[0] or 0)
+        cur.close()
+        conn.close()
+        return n
+    except Exception:
+        return 0
+
+
+def _already_replied_to(parent_tweet_id: str) -> bool:
+    try:
+        import psycopg2
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return False
+        conn = psycopg2.connect(url)
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM twitter_mover_replies WHERE parent_tweet_id = %s LIMIT 1",
+            (str(parent_tweet_id),),
+        )
+        hit = cur.fetchone() is not None
+        cur.close()
+        conn.close()
+        return hit
+    except Exception:
+        return False
+
+
+def _save_mover_reply(
+    parent_tweet_id: str,
+    reply_tweet_id: str,
+    account_name: str,
+    symbol: str,
+    parent_likes: int,
+    reply_text: str,
+) -> None:
+    try:
+        import psycopg2
+        url = os.environ.get("NEON_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not url:
+            return
+        conn = psycopg2.connect(url)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO twitter_mover_replies
+                (parent_tweet_id, reply_tweet_id, account_name, symbol, parent_likes, reply_text)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (parent_tweet_id) DO NOTHING
+            """,
+            (
+                str(parent_tweet_id),
+                str(reply_tweet_id),
+                account_name,
+                symbol,
+                parent_likes,
+                (reply_text or "")[:400],
+            ),
+        )
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logger.warning(f"Could not save mover reply: {e}")
+
+
+async def _get_own_x_user_id(account_poster) -> Optional[str]:
+    """Cache the authenticated X user id so we never reply to ourselves."""
+    name = getattr(account_poster, "name", "") or ""
+    if name in _own_x_user_ids:
+        return _own_x_user_ids[name]
+    client = getattr(account_poster, "client", None)
+    if not client:
+        return None
+    try:
+        me = await asyncio.to_thread(client.get_me)
+        uid = str(me.data.id) if me and me.data else None
+        if uid:
+            _own_x_user_ids[name] = uid
+        return uid
+    except Exception as e:
+        logger.debug(f"get_me failed for {name}: {e}")
+        return None
+
+
+async def _quick_mover_ta_bits(symbol: str) -> Dict:
+    """Lightweight TA facts for reply copy (best-effort)."""
+    bits = {"rsi": None, "trend": None, "vol_ratio": None}
+    try:
+        ohlcv = await _fetch_mexc_ohlcv(symbol, interval="1h", limit=40)
+        if not ohlcv or len(ohlcv) < 20:
+            return bits
+        closes = [float(c[4]) for c in ohlcv]
+        vols = [float(c[5]) for c in ohlcv]
+        ema9 = sum(closes[-9:]) / 9
+        ema21 = sum(closes[-21:]) / 21
+        bits["trend"] = "bullish" if ema9 > ema21 else "bearish"
+        gains, losses = [], []
+        for i in range(1, min(15, len(closes))):
+            d = closes[i] - closes[i - 1]
+            gains.append(max(d, 0))
+            losses.append(max(-d, 0))
+        ag = sum(gains) / len(gains) if gains else 0
+        al = sum(losses) / len(losses) if losses else 0.0001
+        bits["rsi"] = round(100 - (100 / (1 + ag / al)), 1)
+        avg_vol = sum(vols[-10:]) / 10 if len(vols) >= 10 else 0
+        bits["vol_ratio"] = round(vols[-1] / avg_vol, 1) if avg_vol > 0 else None
+    except Exception:
+        pass
+    return bits
+
+
+def _build_mover_reply_text(symbol: str, change: float, ta: Dict) -> str:
+    """Short trader-voice reply. No links, no affiliate, no hashtags."""
+    sign = "+" if change >= 0 else ""
+    rsi = ta.get("rsi")
+    trend = ta.get("trend") or "mixed"
+    vol_ratio = ta.get("vol_ratio")
+
+    rsi_bit = ""
+    if rsi is not None:
+        if rsi >= 72:
+            rsi_bit = f"rsi {rsi} extended"
+        elif rsi <= 35:
+            rsi_bit = f"rsi {rsi} washed out"
+        else:
+            rsi_bit = f"rsi {rsi}"
+
+    vol_bit = ""
+    if vol_ratio and vol_ratio >= 1.5:
+        vol_bit = f"vol {vol_ratio}x avg"
+
+    templates = [
+        f"${symbol} {sign}{change:.1f}% — {rsi_bit or trend} on the hourly. watching for continuation",
+        f"same read on ${symbol}. {vol_bit or trend}, not just a wick",
+        f"${symbol} move is real if {vol_bit or 'volume'} holds. {rsi_bit or trend}",
+        f"been watching ${symbol} too. {sign}{change:.1f}% with {rsi_bit or 'clean structure'}",
+        f"${symbol} {trend} on h1. {rsi_bit + '. ' if rsi_bit else ''}levels matter more than the headline %",
+        f"fair. ${symbol} at {sign}{change:.1f}% — {vol_bit or rsi_bit or trend}. not chasing blindly tho",
+    ]
+    text = random.choice(templates)
+    # Hard safety: never ship a URL in replies
+    import re as _re
+    text = _re.sub(r'https?://\S+', '', text).strip()
+    if len(text) > 220:
+        text = text[:217].rstrip() + "…"
+    return text
+
+
+async def _find_mover_reply_targets(symbols: List[str], own_user_id: Optional[str]) -> List[Dict]:
+    """Search X for high-engagement original tweets about today's movers."""
+    bearer = (os.environ.get("TWITTER_BEARER_TOKEN") or "").strip()
+    if not bearer or not symbols:
+        return []
+
+    client = tweepy.Client(bearer_token=bearer, wait_on_rate_limit=False)
+    targets: List[Dict] = []
+    stables = {"USDT", "USDC", "BUSD", "DAI", "USD", "BTC", "ETH"}  # skip mega-liquid for replies? keep BTC/ETH actually - good traffic
+    stables = {"USDT", "USDC", "BUSD", "DAI", "USD"}
+
+    for symbol in symbols[:5]:
+        if symbol.upper() in stables:
+            continue
+        query = (
+            f"${symbol} lang:en -is:retweet -is:reply "
+            f"min_faves:{MOVER_REPLY_MIN_LIKES}"
+        )
+        try:
+            response = await asyncio.to_thread(
+                client.search_recent_tweets,
+                query=query,
+                max_results=10,
+                tweet_fields=["public_metrics", "text", "author_id", "created_at"],
+                sort_order="relevancy",
+            )
+        except Exception as e:
+            logger.info(f"[mover-reply] search failed for ${symbol}: {e}")
+            continue
+
+        if not response or not response.data:
+            continue
+
+        for tweet in response.data:
+            tid = str(tweet.id)
+            author = str(getattr(tweet, "author_id", "") or "")
+            if own_user_id and author == own_user_id:
+                continue
+            if _already_replied_to(tid):
+                continue
+            text = (tweet.text or "").strip()
+            # Skip pure link dumps / giveaways / bot spam
+            low = text.lower()
+            if any(x in low for x in ("giveaway", "airdrop", "follow me", "dm me", "free signal")):
+                continue
+            if text.count("http") >= 2:
+                continue
+            likes = (tweet.public_metrics or {}).get("like_count", 0) or 0
+            if likes < MOVER_REPLY_MIN_LIKES:
+                continue
+            targets.append({
+                "tweet_id": tid,
+                "symbol": symbol.upper(),
+                "likes": likes,
+                "text": text[:180],
+                "author_id": author,
+            })
+
+    targets.sort(key=lambda t: t["likes"], reverse=True)
+    return targets
+
+
+async def run_mover_reply_cycle() -> int:
+    """One cycle: reply under up to N high-engagement mover tweets. Returns reply count."""
+    if not TWITTER_ENABLED or not TWITTER_AUTO_REPLY_ENABLED:
+        return 0
+    if not _twitter_ready_to_post():
+        return 0
+
+    _ensure_mover_replies_table()
+    already = _mover_replies_today_count()
+    remaining = MAX_MOVER_REPLIES_PER_DAY - already
+    if remaining <= 0:
+        logger.info(f"💬 Mover replies: daily cap reached ({already}/{MAX_MOVER_REPLIES_PER_DAY})")
+        return 0
+
+    accounts = get_all_twitter_accounts()
+    if not accounts:
+        return 0
+    account = accounts[0]
+    account_poster = get_account_poster(account)
+    if not getattr(account_poster, "client", None):
+        return 0
+
+    # Top gainers for cashtag targeting
+    try:
+        gainers = await _fetch_mexc_tickers()
+        _update_daily_gainers(gainers)
+    except Exception:
+        gainers = []
+    symbols = [g["symbol"] for g in (gainers or [])[:12] if g.get("change", 0) >= 3]
+    if not symbols and _DAILY_GAINERS_TICKERS:
+        symbols = list(_DAILY_GAINERS_TICKERS[:8])
+    if not symbols:
+        logger.info("💬 Mover replies: no gainer symbols yet")
+        return 0
+
+    change_map = {g["symbol"]: float(g.get("change", 0)) for g in (gainers or [])}
+    own_id = await _get_own_x_user_id(account_poster)
+    targets = await _find_mover_reply_targets(symbols, own_id)
+    if not targets:
+        logger.info("💬 Mover replies: no eligible parent tweets this cycle")
+        return 0
+
+    budget = min(MOVER_REPLIES_PER_CYCLE, remaining)
+    posted = 0
+    for target in targets[: budget * 2]:  # extra candidates if some fail
+        if posted >= budget:
+            break
+        symbol = target["symbol"]
+        ta = await _quick_mover_ta_bits(symbol)
+        reply_text = _build_mover_reply_text(symbol, change_map.get(symbol, 0.0), ta)
+        # Final link scrub
+        if "http://" in reply_text.lower() or "https://" in reply_text.lower():
+            continue
+
+        result = await asyncio.to_thread(
+            account_poster.post_tweet,
+            reply_text,
+            None,
+            target["tweet_id"],
+        )
+        if result and result.get("success"):
+            _save_mover_reply(
+                target["tweet_id"],
+                result.get("tweet_id"),
+                account.name,
+                symbol,
+                target["likes"],
+                reply_text,
+            )
+            posted += 1
+            logger.info(
+                f"💬 [{account.name}] replied under ${symbol} "
+                f"(parent likes={target['likes']}) → {result.get('tweet_id')}"
+            )
+            await notify_admin_post_result(account.name, f"mover_reply:${symbol}", True)
+            await asyncio.sleep(random.randint(25, 55))  # human-ish gap
+        else:
+            err = (result or {}).get("error", "unknown")
+            logger.warning(f"💬 Mover reply failed on {target['tweet_id']}: {err}")
+
+    return posted
+
+
+async def mover_reply_loop():
+    """Background loop — periodically reply under big mover tweets for reach."""
+    await asyncio.sleep(180)  # let poster settle
+    while True:
+        try:
+            if TWITTER_ENABLED and TWITTER_AUTO_REPLY_ENABLED:
+                n = await run_mover_reply_cycle()
+                if n:
+                    logger.info(f"💬 Mover reply cycle posted {n}")
+            else:
+                logger.info("💬 Mover auto-reply disabled (TWITTER_AUTO_REPLY_ENABLED=false)")
+        except Exception as e:
+            logger.warning(f"💬 Mover reply loop error: {e}")
+        await asyncio.sleep(MOVER_REPLY_CYCLE_SECS)
+
+
 async def run_auto_post_loop_singleton():
     """Run auto_post_loop under a Postgres advisory lock so EXACTLY ONE process
     posts to X — across both gunicorn web workers and the Telegram bot companion.
@@ -3843,6 +4227,10 @@ async def auto_post_loop():
     # Start daily trend discovery (runs every 4h — finds what's trending on X)
     asyncio.create_task(trend_discovery_loop())
     logger.info("🔥 Daily trend discovery loop started")
+
+    # Auto-reply under high-engagement mover tweets (TA only, no links)
+    asyncio.create_task(mover_reply_loop())
+    logger.info("💬 Mover auto-reply loop started")
 
     loop_count = 0
     while True:
