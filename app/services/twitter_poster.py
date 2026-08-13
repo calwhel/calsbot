@@ -149,7 +149,6 @@ TWITTER_ACCESS_TOKEN = os.getenv("TWITTER_ACCESS_TOKEN")
 TWITTER_ACCESS_TOKEN_SECRET = os.getenv("TWITTER_ACCESS_TOKEN_SECRET")
 TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
 
-TWITTER_ENABLED = os.getenv("TWITTER_ENABLED", "false").lower() in ("1", "true", "yes")
 _TWITTER_DISABLED_LOGGED = False
 
 
@@ -189,6 +188,25 @@ def _twitter_ready_to_post() -> bool:
     return _twitter_credentials_configured() or _has_postable_twitter_accounts()
 
 
+def twitter_posting_enabled() -> bool:
+    """Resolve TWITTER_ENABLED with auto-on when keys exist.
+
+    - explicit 0/false/off → disabled
+    - explicit 1/true/on → enabled
+    - unset/empty → enabled iff env OAuth/bearer or DB twitter accounts exist
+    """
+    raw = (os.getenv("TWITTER_ENABLED") or "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    return _twitter_ready_to_post()
+
+
+# Module-level snapshot (tests may overwrite). Prefer twitter_posting_enabled() at runtime.
+TWITTER_ENABLED = twitter_posting_enabled()
+
+
 def _log_twitter_poster_disabled(reason: str) -> None:
     global _TWITTER_DISABLED_LOGGED
     if _TWITTER_DISABLED_LOGGED:
@@ -198,7 +216,7 @@ def _log_twitter_poster_disabled(reason: str) -> None:
 
 
 def twitter_poster_active() -> bool:
-    return TWITTER_ENABLED and _twitter_ready_to_post()
+    return twitter_posting_enabled() and _twitter_ready_to_post()
 
 
 # Posting limits - 25 posts per day (20 regular + 4 campaign + 1 buffer)
@@ -3293,7 +3311,7 @@ async def _discover_daily_trends() -> dict:
             and _DAILY_TRENDS_CACHE["coins"]):
         return {"coins": _DAILY_TRENDS_CACHE["coins"], "topics": _DAILY_TRENDS_CACHE["topics"]}
 
-    if not TWITTER_ENABLED:
+    if not twitter_posting_enabled():
         return {"coins": [], "topics": []}
 
     bearer = os.environ.get("TWITTER_BEARER_TOKEN")
@@ -3993,7 +4011,7 @@ async def _find_mover_reply_targets(symbols: List[str], own_user_id: Optional[st
 
 async def run_mover_reply_cycle() -> int:
     """One cycle: reply under up to N high-engagement mover tweets. Returns reply count."""
-    if not TWITTER_ENABLED or not TWITTER_AUTO_REPLY_ENABLED:
+    if not twitter_posting_enabled() or not TWITTER_AUTO_REPLY_ENABLED:
         return 0
     if not _twitter_ready_to_post():
         return 0
@@ -4079,12 +4097,12 @@ async def mover_reply_loop():
     await asyncio.sleep(180)  # let poster settle
     while True:
         try:
-            if TWITTER_ENABLED and TWITTER_AUTO_REPLY_ENABLED:
+            if twitter_posting_enabled() and TWITTER_AUTO_REPLY_ENABLED:
                 n = await run_mover_reply_cycle()
                 if n:
                     logger.info(f"💬 Mover reply cycle posted {n}")
             else:
-                logger.info("💬 Mover auto-reply disabled (TWITTER_AUTO_REPLY_ENABLED=false)")
+                logger.info("💬 Mover auto-reply disabled (TWITTER_ENABLED off or AUTO_REPLY=false)")
         except Exception as e:
             logger.warning(f"💬 Mover reply loop error: {e}")
         await asyncio.sleep(MOVER_REPLY_CYCLE_SECS)
@@ -4102,8 +4120,10 @@ async def run_auto_post_loop_singleton():
     never double-posting. The lock auto-releases on process death, so a survivor
     transparently takes over.
     """
-    if not TWITTER_ENABLED:
-        _log_twitter_poster_disabled("TWITTER_ENABLED=false (set TWITTER_ENABLED=1 to resume)")
+    if not twitter_posting_enabled():
+        _log_twitter_poster_disabled(
+            "TWITTER_ENABLED=false (or no credentials — set TWITTER_ENABLED=1 + keys)"
+        )
         while True:
             await asyncio.sleep(3600)
         return
