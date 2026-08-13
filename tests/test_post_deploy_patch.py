@@ -54,8 +54,7 @@ class TestTwitterEnabledGate(unittest.TestCase):
             "os.environ",
             {},
             clear=True,
-        ):
-            tw.TWITTER_ENABLED = False
+        ), mock.patch.object(tw, "get_all_twitter_accounts", return_value=[]):
             self.assertFalse(tw.twitter_poster_active())
 
     def test_executor_lock_connect_no_duplicate_timeout(self):
