@@ -34,6 +34,7 @@ LAZY_DDL_TABLES: frozenset[str] = frozenset(
         "owner_notification_dedup",
         "twitter_account_growth",
         "twitter_daily_trends",
+        "twitter_mover_replies",
         "twitter_post_metrics",
         "twitter_schedule_slots",
         "wall_snapshots",
