@@ -11,6 +11,15 @@ EXCHANGE=
 SYMBOLS=
 SESSION_SECRET=
 
+# X / Twitter auto-poster (Bitunix signup drive) — required to resume posting
+TWITTER_ENABLED=1
+TWITTER_CONSUMER_KEY=
+TWITTER_CONSUMER_SECRET=
+TWITTER_ACCESS_TOKEN=
+TWITTER_ACCESS_TOKEN_SECRET=
+TWITTER_BEARER_TOKEN=
+BITUNIX_REFERRAL_URL=https://www.bitunix.com/register?vipCode=tradehubsave
+
 Note: Database variables (DATABASE_URL, PGHOST, etc.) will be auto-created by Railway when you add PostgreSQL.
 
 ⚠️ IMPORTANT: Make sure to set Railway region to EU (Ireland or Frankfurt) BEFORE deploying!
