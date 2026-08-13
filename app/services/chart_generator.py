@@ -24,9 +24,46 @@ except ImportError:
     logger.warning("matplotlib not installed - chart generation disabled")
 
 
+async def _fetch_mexc_ohlcv(symbol: str, timeframe: str = '1h', limit: int = 48) -> Optional[List]:
+    """MEXC spot klines — reliable on Railway where Binance is often geoblocked."""
+    import httpx
+    interval_map = {'1h': '60m', '2h': '120m', '4h': '4h', '1d': '1d'}
+    mexc_interval = interval_map.get(timeframe, timeframe if timeframe.endswith('m') else '60m')
+    mexc_sym = f"{symbol.upper()}USDT" if not symbol.upper().endswith('USDT') else symbol.upper()
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            r = await client.get(
+                "https://api.mexc.com/api/v3/klines",
+                params={"symbol": mexc_sym, "interval": mexc_interval, "limit": limit},
+            )
+            r.raise_for_status()
+            raw = r.json()
+        # Normalize to ccxt-like [ts, o, h, l, c, v]
+        out = []
+        for row in raw:
+            out.append([
+                int(row[0]),
+                float(row[1]),
+                float(row[2]),
+                float(row[3]),
+                float(row[4]),
+                float(row[5]),
+            ])
+        if out:
+            logger.info(f"✅ Got OHLCV from MEXC for {symbol}")
+            return out
+    except Exception as e:
+        logger.warning(f"MEXC OHLCV failed for {symbol}: {e}")
+    return None
+
+
 async def get_ohlcv_data(symbol: str, timeframe: str = '1h', limit: int = 48) -> Optional[List]:
-    """Fetch OHLCV data from Binance (tries Futures first, then Spot)"""
-    # Try Binance Futures first (more coins available)
+    """Fetch OHLCV — MEXC first (Railway-safe), then Binance futures/spot fallback."""
+    mexc = await _fetch_mexc_ohlcv(symbol, timeframe, limit)
+    if mexc:
+        return mexc
+
+    # Binance Futures (often 451 on Railway)
     try:
         exchange = ccxt.binance({
             'enableRateLimit': True,
@@ -38,8 +75,7 @@ async def get_ohlcv_data(symbol: str, timeframe: str = '1h', limit: int = 48) ->
         return ohlcv
     except Exception as e:
         logger.warning(f"Futures OHLCV failed for {symbol}: {e}, trying spot...")
-    
-    # Fallback to Binance Spot
+
     try:
         exchange = ccxt.binance({'enableRateLimit': True})
         ohlcv = await exchange.fetch_ohlcv(f"{symbol}/USDT", timeframe, limit=limit)
@@ -47,7 +83,7 @@ async def get_ohlcv_data(symbol: str, timeframe: str = '1h', limit: int = 48) ->
         logger.info(f"✅ Got OHLCV from Binance Spot for {symbol}")
         return ohlcv
     except Exception as e:
-        logger.error(f"Failed to fetch OHLCV for {symbol} (both futures and spot): {e}")
+        logger.error(f"Failed to fetch OHLCV for {symbol} (MEXC + Binance): {e}")
         return None
 
 

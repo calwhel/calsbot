@@ -7404,7 +7404,7 @@ async def cb_twitter_account_settings(callback: types.CallbackQuery):
             ])
             buttons.append([
                 InlineKeyboardButton(text="🔥 High Viewing", callback_data=f"tw_manual_{account_id}_high_viewing"),
-                InlineKeyboardButton(text="💰 Campaign", callback_data=f"tw_manual_{account_id}_bitunix_campaign")
+                InlineKeyboardButton(text="🔗 Bitunix Signup", callback_data=f"tw_manual_{account_id}_bitunix_signup")
             ])
             buttons.append([
                 InlineKeyboardButton(text="📲 Free Telegram", callback_data=f"tw_manual_{account_id}_free_telegram"),
@@ -7821,7 +7821,9 @@ async def cb_twitter_manual_post(callback: types.CallbackQuery):
             'daily_recap': 'Daily Recap',
             'high_viewing': 'High Viewing',
             'bitunix_campaign': 'Bitunix Campaign',
+            'bitunix_signup': 'Bitunix Signup',
             'free_telegram': 'Free Telegram Promo',
+            'top_gainer_ta': 'Top Gainer TA',
         }
         
         await callback.answer(f"Posting {type_names.get(post_type, post_type)}...")
