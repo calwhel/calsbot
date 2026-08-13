@@ -305,6 +305,22 @@ def _ensure_twitter_tables(bind: Engine) -> None:
         CREATE INDEX IF NOT EXISTS idx_daily_trends_date
         ON twitter_daily_trends (trend_date DESC)
         """,
+        """
+        CREATE TABLE IF NOT EXISTS twitter_mover_replies (
+            id              SERIAL PRIMARY KEY,
+            parent_tweet_id TEXT UNIQUE NOT NULL,
+            reply_tweet_id  TEXT,
+            account_name    TEXT NOT NULL,
+            symbol          TEXT,
+            parent_likes    INTEGER,
+            reply_text      TEXT,
+            created_at      TIMESTAMPTZ DEFAULT NOW()
+        )
+        """,
+        """
+        CREATE INDEX IF NOT EXISTS idx_mover_replies_day
+        ON twitter_mover_replies (created_at DESC)
+        """,
     )
     with bind.begin() as conn:
         for sql in stmts:
