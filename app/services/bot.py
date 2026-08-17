@@ -7404,9 +7404,10 @@ async def cb_twitter_account_settings(callback: types.CallbackQuery):
             ])
             buttons.append([
                 InlineKeyboardButton(text="🔥 High Viewing", callback_data=f"tw_manual_{account_id}_high_viewing"),
-                InlineKeyboardButton(text="🔗 Bitunix Signup", callback_data=f"tw_manual_{account_id}_bitunix_signup")
+                InlineKeyboardButton(text="💰 Bitunix Campaign", callback_data=f"tw_manual_{account_id}_bitunix_campaign")
             ])
             buttons.append([
+                InlineKeyboardButton(text="🔗 Bitunix Signup", callback_data=f"tw_manual_{account_id}_bitunix_signup"),
                 InlineKeyboardButton(text="📲 Free Telegram", callback_data=f"tw_manual_{account_id}_free_telegram"),
             ])
         
