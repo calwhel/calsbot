@@ -11351,7 +11351,7 @@ async def api_portfolio(uid: str = Query(...)):
             "has_uid":     bool(d["bitunix_uid"]),
             "has_keys":    d["has_keys"],
             "referral_url": (
-                os.environ.get("BITUNIX_REFERRAL_URL", "https://www.bitunix.com/register?vipCode=tradehubsave")
+                os.environ.get("BITUNIX_REFERRAL_URL", "https://www.bitunix.com/activity/basic/ENWeeklyCampaign0817?vipCode=fgq74890")
             ),
         },
     }

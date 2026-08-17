@@ -16,13 +16,15 @@ if ! command -v railway >/dev/null 2>&1; then
   exit 1
 fi
 
-REFERRAL="${BITUNIX_REFERRAL_URL:-https://www.bitunix.com/register?vipCode=tradehubsave}"
+REFERRAL="${BITUNIX_REFERRAL_URL:-https://www.bitunix.com/activity/basic/ENWeeklyCampaign0817?vipCode=fgq74890}"
+CAMPAIGN="${BITUNIX_CAMPAIGN_URL:-https://www.bitunix.com/activity/basic/ENWeeklyCampaign0817?vipCode=fgq74890}"
 
-echo "Enabling X auto-post + mover replies on Railway..."
+echo "Enabling X auto-post + Bitunix Aug campaign push on Railway..."
 railway variables set \
   TWITTER_ENABLED=1 \
   TWITTER_AUTO_REPLY_ENABLED=1 \
-  "BITUNIX_REFERRAL_URL=${REFERRAL}"
+  "BITUNIX_REFERRAL_URL=${REFERRAL}" \
+  "BITUNIX_CAMPAIGN_URL=${CAMPAIGN}"
 
 echo "Done. Confirm TWITTER_* OAuth keys already exist, then redeploy."
-echo "Look for logs: 'X-poster advisory lock acquired' and 'Mover auto-reply loop started'"
+echo "Look for logs: 'X-poster advisory lock acquired', schedule with bitunix_campaign"

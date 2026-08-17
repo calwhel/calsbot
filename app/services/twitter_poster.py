@@ -2561,18 +2561,19 @@ def assign_post_types(name: str, post_types: List[str]) -> Dict:
 
 POST_SCHEDULE = [
     # (hour_utc, minute, post_type)
-    # Influencer-first mix (~80% value / ~20% soft Bitunix).
-    # Value posts drive views; soft signup slots are trader-voice, not promo walls.
-    (6, 30,  'early_gainer'),       # Asia — early mover FOMO
-    (8, 0,   'top_gainer_ta'),      # Asia — top gainer TA (+ chart)
-    (10, 15, 'memecoin'),           # EU morning — meme / cashtag discovery
-    (12, 0,  'market_take'),        # Midday — KOL opinion (saves/reposts)
-    (13, 45, 'bitunix_signup'),     # Soft Bitunix #1 (after value stretch)
-    (15, 30, 'quick_ta'),           # EU/US — quick TA (+ chart)
-    (17, 30, 'top_gainer_ta'),      # US open — chart TA (highest CT traffic)
-    (19, 0,  'high_viewing'),       # US afternoon — viral / extreme movers
-    (20, 45, 'bitunix_signup'),     # Soft Bitunix #2
-    (22, 15, 'altcoin_movers'),     # Evening watchlist
+    # AUG 17–31 2026: Bitunix x TradeHub campaign push (hard).
+    # Keep a few TA/mover slots for reach; majority = bitunix_campaign + image.
+    (5, 0,   'bitunix_campaign'),   # Asia early
+    (7, 30,  'top_gainer_ta'),      # reach / chart
+    (9, 15,  'bitunix_campaign'),   # EU morning
+    (11, 0,  'bitunix_campaign'),   # EU midday
+    (12, 45, 'early_gainer'),       # reach
+    (14, 0,  'bitunix_campaign'),   # EU/US overlap
+    (16, 0,  'top_gainer_ta'),      # US open reach
+    (17, 30, 'bitunix_campaign'),   # US afternoon
+    (19, 0,  'bitunix_campaign'),   # US evening
+    (20, 30, 'high_viewing'),       # reach
+    (22, 0,  'bitunix_campaign'),   # late US / Asia
 ]
 
 
@@ -4657,17 +4658,21 @@ $ETH {eth_sign}{market['eth_change']:.1f}% at ${market['eth_price']:,.0f}
             return await post_quick_ta(account_poster, main_poster)
         
         elif post_type == 'tradehub_promo':
-            # Pure market edu — Bitunix only via dedicated soft signup slots.
+            # During the live Bitunix campaign, promo slots become campaign posts.
+            if bitunix_campaign_is_active() and random.random() < 0.6:
+                return await post_bitunix_campaign(account_poster)
             return await post_tradehub_promo(account_poster)
 
         elif post_type == 'market_take':
             return await post_market_take(account_poster)
 
         elif post_type == 'bitunix_signup':
+            # While the Aug campaign is live, signup slots promote the campaign page.
+            if bitunix_campaign_is_active():
+                return await post_bitunix_campaign(account_poster)
             return await post_bitunix_signup(account_poster)
 
         elif post_type == 'bitunix_campaign':
-            # Time-boxed deposit campaign ended Apr 2026 — fall back to evergreen signup.
             result = await post_bitunix_campaign(account_poster)
             if result is None:
                 return await post_bitunix_signup(account_poster)
@@ -6239,20 +6244,44 @@ async def post_free_telegram_promo(account_poster) -> Optional[Dict]:
         return {'success': False, 'error': str(e)}
 
 
-BITUNIX_CAMPAIGN_IMAGE = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                                       "attached_assets", "IMG_1209_1775372269740.jpeg")
-BITUNIX_CAMPAIGN_LINK = "https://www.bitunix.com/activity/basic/1774508484?vipCode=fgq74890"
-BITUNIX_CAMPAIGN_START = datetime(2026, 3, 27)
-BITUNIX_CAMPAIGN_END = datetime(2026, 4, 26, 23, 59, 59)
+BITUNIX_CAMPAIGN_IMAGE = os.environ.get(
+    "BITUNIX_CAMPAIGN_IMAGE",
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "attached_assets",
+        "bitunix_campaign_aug2026.png",
+    ),
+).strip()
+# Aug 17–31 2026 Bitunix x TradeHub Markets — up to 20,000 USDT rewards
+BITUNIX_CAMPAIGN_LINK = os.environ.get(
+    "BITUNIX_CAMPAIGN_URL",
+    "https://www.bitunix.com/activity/basic/ENWeeklyCampaign0817?vipCode=fgq74890",
+).strip() or "https://www.bitunix.com/activity/basic/ENWeeklyCampaign0817?vipCode=fgq74890"
+# Event listed as UTC+8: Aug 17 00:00 → Aug 31 23:59
+BITUNIX_CAMPAIGN_START = datetime(2026, 8, 16, 16, 0, 0)
+BITUNIX_CAMPAIGN_END = datetime(2026, 8, 31, 15, 59, 59)
 
-# Evergreen affiliate signup — uses platform referral URL (not the expired Apr 2026 campaign).
+
+def bitunix_campaign_is_active(now: Optional[datetime] = None) -> bool:
+    now = now or datetime.utcnow()
+    return BITUNIX_CAMPAIGN_START <= now <= BITUNIX_CAMPAIGN_END
+
+
+# Evergreen affiliate signup — after campaign ends, fall back here.
 BITUNIX_SIGNUP_LINK = os.environ.get(
     "BITUNIX_REFERRAL_URL",
-    "https://www.bitunix.com/register?vipCode=tradehubsave",
-).strip() or "https://www.bitunix.com/register?vipCode=tradehubsave"
+    "https://www.bitunix.com/register?vipCode=fgq74890",
+).strip() or "https://www.bitunix.com/register?vipCode=fgq74890"
 
-# Soft trader-voice CTAs — lead with the market, Bitunix is where you execute.
-# No deposit bonuses, slot scarcity, or hard "SIGN UP NOW" walls.
+
+def active_bitunix_promo_link() -> str:
+    """Campaign page while live; otherwise evergreen register link."""
+    if bitunix_campaign_is_active():
+        return BITUNIX_CAMPAIGN_LINK
+    return BITUNIX_SIGNUP_LINK
+
+
+# Soft trader-voice CTAs — during campaign these still point at the campaign URL.
 BITUNIX_SIGNUP_TEMPLATES = [
     {
         'id': 'execute_here',
@@ -6313,189 +6342,119 @@ _bitunix_signup_post_index = 0
 
 CAMPAIGN_TEMPLATES = [
     {
-        'id': 'low_barrier_entry',
-        'text': """$100 deposit on Bitunix = $100 USDT position voucher free
+        'id': 'headline_20k',
+        'text': """Bitunix x TradeHub Markets is live
 
-100 slots. First come first served.
+up to 20,000 USDT in rewards
+Aug 17 – Aug 31
 
-Bitunix x TradeHub Markets running until April 26
-Trading {ticker1} {ticker2} anyway — might as well claim it
+deposit bonuses + volume rewards + trading competition
 
-{link}"""
+{ticker1} {ticker2} movers today — claim before slots go
+
+{link}""",
     },
     {
-        'id': 'top_tier_math',
-        'text': """Deposit $2,000 on Bitunix = $1,000 USDT in position vouchers
+        'id': 'deposit_ladder',
+        'text': """new Bitunix users this week:
 
-That's a 50% bonus just for depositing and holding 9 days
+$100 deposit → 20 USDT (30 slots)
+$500 → 60 USDT (20 slots)
+$1,000 → 180 USDT (20 slots)
+$2,000 → 380 USDT (10 slots)
 
-Only 20 slots at the top tier. No restock.
+first come first served. ends Aug 31
 
-Bitunix x TradeHub Markets — ends April 26
-
-{link}"""
+{link}""",
     },
     {
-        'id': 'volume_rewards_breakdown',
-        'text': """If you're already running volume on {ticker1} {ticker2} {ticker3} perps you're leaving free money on the table
+        'id': 'low_barrier',
+        'text': """$100 net deposit on Bitunix = 20 USDT bonus
 
-$10K vol = 200 USDT BTC voucher
-$50K vol = 300 USDT BTC voucher
-$100K vol = 15 USDT futures bonus
+only 30 slots at that tier. new users only.
+Bitunix x TradeHub — Aug 17 to Aug 31
 
-Bitunix x TradeHub Markets. Ends April 26.
+trading {ticker1} {ticker2} anyway — claim it
 
-{link}"""
+{link}""",
+    },
+    {
+        'id': 'top_deposit',
+        'text': """$2,000 deposit tier on Bitunix = 380 USDT bonus
+
+10 slots. no restock.
+Bitunix x TradeHub Markets campaign ends Aug 31
+
+{link}""",
+    },
+    {
+        'id': 'volume_ladder',
+        'text': """Bitunix volume rewards this campaign:
+
+10k vol → 5 USDT
+50k → 15
+150k → 35
+500k → 65
+1M → 120
+5M → 250
+15M → 500
+
+stack on top of deposit bonuses. {ticker1} {ticker2} count.
+
+{link}""",
+    },
+    {
+        'id': 'competition',
+        'text': """Bitunix trading competition live (TradeHub partner)
+
+volume rank top 50 · pnl top 20 · roi top 20
+prize pool share across the board — up to 20,000 USDT total rewards
+
+ends Aug 31
+
+{link}""",
+    },
+    {
+        'id': 'mover_hook',
+        'text': """{ticker1} {pct1}% and {ticker2} {pct2}% today
+
+if you're trading these on Bitunix right now, deposit + volume rewards are stacking until Aug 31
+
+Bitunix x TradeHub Markets
+{link}""",
+    },
+    {
+        'id': 'scarcity',
+        'text': """slot count on the Bitunix x TradeHub deposit campaign:
+
+$100 tier = 30 slots
+$500 = 20
+$1,000 = 20
+$2,000 = 10
+
+first come first served. campaign closes Aug 31.
+
+{link}""",
     },
     {
         'id': 'stack_both',
-        'text': """Deposit bonus + volume rewards on Bitunix stack independently
+        'text': """deposit bonus + volume rewards on Bitunix stack
 
-Put in $1,000 = 2×250 USDT vouchers
-Run $50K volume = another 300 USDT BTC voucher
+put in $1,000 → 180 USDT bonus
+run volume → more USDT on the ladder
+competition pool on top
 
-You're already trading {ticker1}. Both rewards apply at once.
-
-Bitunix x TradeHub Markets
-
-{link}"""
+{ticker1} {ticker2} already moving. ends Aug 31
+{link}""",
     },
     {
-        'id': 'scarcity_slots',
-        'text': """Slot count for the Bitunix x TradeHub campaign:
+        'id': 'direct_cta',
+        'text': """Bitunix x TradeHub Markets — win up to 20,000 USDT
 
-$100 tier = 100 slots
-$500 tier = 50 slots
-$1,000 tier = 30 slots
-$2,000 tier = 20 slots
+Aug 17–31 only. deposit rewards · volume rewards · trading competition
 
-Slots are the constraint here, not the end date.
-{ticker1} {ticker2} traders already moving in.
-
-{link}"""
-    },
-    {
-        'id': 'fomo_ticker_hook',
-        'text': """{ticker1} up {pct1}% and {ticker2} up {pct2}% today
-
-Traders catching those moves on Bitunix are also collecting deposit bonuses on top
-
-Up to $1,000 USDT in vouchers for new deposits
-Volume rewards on top of that
-
-Bitunix x TradeHub Markets — April 26
-
-{link}"""
-    },
-    {
-        'id': 'perps_trader_angle',
-        'text': """You're already longing {ticker1} and {ticker2} perps somewhere
-
-If it's Bitunix, you qualify for up to $1,000 USDT in deposit vouchers this month
-
-New user deposit campaign live now — 27 March to 26 April
-
-Bitunix x TradeHub Markets
-
-{link}"""
-    },
-    {
-        'id': 'low_barrier_v2',
-        'text': """Entry level on this campaign is $100
-
-Hold it 3 days. Get a 100 USDT BTC position voucher back.
-
-There are 100 slots at that tier. Not "limited" as marketing. Literally 100.
-
-Bitunix x TradeHub Markets
-{ticker1} {ticker2} both tradeable on there.
-
-{link}"""
-    },
-    {
-        'id': 'btc_voucher_angle',
-        'text': """The volume rewards on this Bitunix campaign pay out in BTC position vouchers
-
-$10K in volume = 200 USDT BTC voucher
-$50K in volume = 300 USDT BTC voucher
-
-Meaning you get leveraged BTC exposure for free just by trading {ticker1} {ticker2} {ticker3}
-
-Ends April 26. Bitunix x TradeHub Markets
-
-{link}"""
-    },
-    {
-        'id': 'regret_frame',
-        'text': """The 20 slots at the $2,000 deposit tier go first every campaign
-
-$1,000 USDT in position vouchers for one deposit and a 9 day hold
-
-When those slots go they're gone. No waitlist. No second round.
-
-Bitunix x TradeHub Markets — runs until April 26
-
-{link}"""
-    },
-    {
-        'id': 'night_grind',
-        'text': """grinding {ticker1} positions at 3am anyway
-
-might as well be collecting deposit bonuses and volume rewards at the same time
-
-Bitunix x TradeHub Markets. $100 minimum. 100 slots at that tier. ends April 26
-
-{link}"""
-    },
-    {
-        'id': 'comparison_exchange',
-        'text': """Other exchanges take fees to trade {ticker1}
-
-Bitunix is paying new users to trade it
-
-$100 minimum deposit. Volume rewards on top. Campaign runs through April 26.
-
-Bitunix x TradeHub Markets — limited slots across all tiers
-
-{link}"""
-    },
-    {
-        'id': 'honest_observation',
-        'text': """I usually ignore exchange campaigns
-
-This one is different because the volume rewards apply to trades you'd be doing anyway
-
-$10K vol on {ticker1} {ticker2} perps = 200 USDT BTC voucher. No extra steps.
-
-Bitunix x TradeHub Markets — ends April 26
-
-{link}"""
-    },
-    {
-        'id': 'whale_tier',
-        'text': """For the bigger accounts running volume on Bitunix:
-
-$500K volume = 30 USDT futures bonus
-$1M volume = 60 USDT futures bonus
-$5M volume = 300 USDT futures bonus
-
-Plus deposit rewards on top if you haven't claimed those
-
-Bitunix x TradeHub Markets. {ticker1} {ticker2} {ticker3} all there.
-
-{link}"""
-    },
-    {
-        'id': 'simple_cta',
-        'text': """Bitunix x TradeHub Markets campaign is live
-
-Deposit rewards up to $1,000 USDT in vouchers
-Volume rewards up to $300 USDT BTC position
-
-{ticker1} {ticker2} {ticker3} all available on there
-Runs until April 26. Slots fill by tier.
-
-{link}"""
+{ticker1} {ticker2} {ticker3}
+{link}""",
     },
 ]
 
@@ -7452,8 +7411,9 @@ async def post_bitunix_signup(account_poster) -> Optional[Dict]:
         _bitunix_signup_post_index += 1
 
         live_tickers = await get_live_tickers_for_campaign()
+        promo_link = active_bitunix_promo_link()
         tweet_text = template['text'].format(
-            link=BITUNIX_SIGNUP_LINK,
+            link=promo_link,
             **live_tickers,
         )
 
@@ -7488,14 +7448,12 @@ async def post_bitunix_signup(account_poster) -> Optional[Dict]:
         tweet_text = await _ai_review_tweet(tweet_text, 'bitunix_signup', {
             'template': template['id'],
             'exchange': 'Bitunix',
-            'goal': 'soft trader-voice Bitunix mention that still includes the referral link',
-            'link': BITUNIX_SIGNUP_LINK,
+            'goal': 'drive Bitunix signups / campaign page clicks',
+            'link': promo_link,
             'style_note': (
-                'Sound like a crypto twitter trader, not an affiliate marketer. '
-                'Lowercase, casual, no em dashes, no emojis, no "sign up now", '
-                'no deposit bonuses, no slot scarcity, no VIP hard-sell. '
-                'Keep the Bitunix link and any %/ticker figures intact. '
-                'Lead with the market move; Bitunix is a side mention.'
+                'Lowercase, casual trader voice. No em dashes. Keep the Bitunix '
+                'link and any %/ticker figures intact. During Aug 17-31 campaign, '
+                'deposit/volume/competition mentions are OK if already in the draft.'
             ),
         })
 

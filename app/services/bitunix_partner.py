@@ -48,7 +48,10 @@ REQUIRE_AFFILIATE  = os.environ.get("BITUNIX_REQUIRE_AFFILIATE", "1").lower() in
 HTTP_TIMEOUT       = int(os.environ.get("BITUNIX_PARTNER_HTTP_TIMEOUT", "10"))
 PAGE_SIZE          = int(os.environ.get("BITUNIX_PARTNER_PAGE_SIZE", "200"))
 MAX_PAGES          = int(os.environ.get("BITUNIX_PARTNER_MAX_PAGES", "50"))
-REFERRAL_URL       = os.environ.get("BITUNIX_REFERRAL_URL", "https://www.bitunix.com/register?vipCode=tradehubsave")
+REFERRAL_URL       = os.environ.get(
+    "BITUNIX_REFERRAL_URL",
+    "https://www.bitunix.com/activity/basic/ENWeeklyCampaign0817?vipCode=fgq74890",
+)
 
 # In-memory cache: (uid_set, fetched_at_epoch, total_count_or_None).
 _cache: Tuple[Set[str], float, Optional[int]] = (set(), 0.0, None)
