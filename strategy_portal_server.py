@@ -11350,9 +11350,7 @@ async def api_portfolio(uid: str = Query(...)):
             "reason":      aff_reason,
             "has_uid":     bool(d["bitunix_uid"]),
             "has_keys":    d["has_keys"],
-            "referral_url": (
-                os.environ.get("BITUNIX_REFERRAL_URL", "https://www.bitunix.com/activity/basic/ENWeeklyCampaign0817?vipCode=fgq74890")
-            ),
+            "referral_url": "https://www.bitunix.com/activity/basic/ENWeeklyCampaign0817?vipCode=fgq74890",
         },
     }
     _CACHE[cache_key] = (payload, time.time() + 60)
