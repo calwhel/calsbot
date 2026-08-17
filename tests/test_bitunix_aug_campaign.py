@@ -19,7 +19,18 @@ class TestAugBitunixCampaign(unittest.TestCase):
 
         self.assertIn("ENWeeklyCampaign0817", tw.BITUNIX_CAMPAIGN_LINK)
         self.assertIn("vipCode=fgq74890", tw.BITUNIX_CAMPAIGN_LINK)
-        self.assertTrue(os.path.exists(tw.BITUNIX_CAMPAIGN_IMAGE), tw.BITUNIX_CAMPAIGN_IMAGE)
+        img = tw.resolve_bitunix_campaign_image()
+        self.assertTrue(os.path.exists(img), img)
+        self.assertTrue(img.lower().endswith((".png", ".jpg", ".jpeg", ".webp")))
+
+    def test_empty_env_image_falls_back_to_default(self):
+        from app.services import twitter_poster as tw
+        import os
+
+        with mock.patch.dict(os.environ, {"BITUNIX_CAMPAIGN_IMAGE": ""}, clear=False):
+            img = tw.resolve_bitunix_campaign_image()
+        self.assertTrue(os.path.exists(img))
+        self.assertIn("bitunix_campaign", os.path.basename(img).lower())
 
     def test_schedule_is_campaign_heavy(self):
         from app.services import twitter_poster as tw

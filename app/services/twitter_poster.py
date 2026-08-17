@@ -2285,13 +2285,16 @@ class MultiAccountPoster:
             logger.error(f"[{self.name}] Twitter error: {e}")
             return {'success': False, 'error': str(e), 'account': self.name}
     
-    def upload_media(self, image_bytes: bytes) -> Optional[str]:
+    def upload_media(self, image_bytes: bytes, filename: str = "chart.png") -> Optional[str]:
         """Upload media for this account"""
         if not self.api_v1:
             return None
         
         try:
-            media = self.api_v1.media_upload(filename="chart.png", file=io.BytesIO(image_bytes))
+            media = self.api_v1.media_upload(
+                filename=filename or "chart.png",
+                file=io.BytesIO(image_bytes),
+            )
             return str(media.media_id)
         except Exception as e:
             logger.error(f"[{self.name}] Media upload error: {e}")
@@ -6244,14 +6247,48 @@ async def post_free_telegram_promo(account_poster) -> Optional[Dict]:
         return {'success': False, 'error': str(e)}
 
 
-BITUNIX_CAMPAIGN_IMAGE = os.environ.get(
-    "BITUNIX_CAMPAIGN_IMAGE",
-    os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-        "attached_assets",
-        "bitunix_campaign_aug2026.png",
-    ),
-).strip()
+_ATTACHED_ASSETS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    "attached_assets",
+)
+_DEFAULT_CAMPAIGN_IMAGE = os.path.join(_ATTACHED_ASSETS_DIR, "bitunix_campaign_aug2026.png")
+
+
+def resolve_bitunix_campaign_image() -> str:
+    """Pick the campaign poster to attach.
+
+    Priority:
+    1) BITUNIX_CAMPAIGN_IMAGE env (if path exists)
+    2) Newest attached_assets/bitunix_campaign*.{png,jpg,jpeg,webp}
+    3) Default bitunix_campaign_aug2026.png
+    """
+    env_path = (os.environ.get("BITUNIX_CAMPAIGN_IMAGE") or "").strip()
+    if env_path and os.path.exists(env_path):
+        return env_path
+
+    try:
+        import glob
+        matches = []
+        for pat in (
+            "bitunix_campaign*.png",
+            "bitunix_campaign*.jpg",
+            "bitunix_campaign*.jpeg",
+            "bitunix_campaign*.webp",
+            "*ENWeeklyCampaign*.png",
+            "*ENWeeklyCampaign*.jpg",
+        ):
+            matches.extend(glob.glob(os.path.join(_ATTACHED_ASSETS_DIR, pat)))
+        matches = [m for m in matches if os.path.isfile(m)]
+        if matches:
+            matches.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+            return matches[0]
+    except Exception as e:
+        logger.debug(f"campaign image glob failed: {e}")
+
+    return _DEFAULT_CAMPAIGN_IMAGE
+
+
+BITUNIX_CAMPAIGN_IMAGE = resolve_bitunix_campaign_image()
 # Aug 17–31 2026 Bitunix x TradeHub Markets — up to 20,000 USDT rewards
 BITUNIX_CAMPAIGN_LINK = os.environ.get(
     "BITUNIX_CAMPAIGN_URL",
@@ -7542,32 +7579,41 @@ async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
                 tweet_text = tweet_text[:_idx].rstrip()
         
         media_id = None
-        if os.path.exists(BITUNIX_CAMPAIGN_IMAGE):
+        campaign_image = resolve_bitunix_campaign_image()
+        if os.path.exists(campaign_image):
             try:
-                with open(BITUNIX_CAMPAIGN_IMAGE, 'rb') as f:
+                with open(campaign_image, 'rb') as f:
                     image_bytes = f.read()
-                
+
+                fname = os.path.basename(campaign_image) or "bitunix_campaign.png"
                 if hasattr(account_poster, 'upload_media'):
-                    media_id = account_poster.upload_media(image_bytes)
+                    try:
+                        media_id = account_poster.upload_media(image_bytes, filename=fname)
+                    except TypeError:
+                        # Older signature without filename kwarg
+                        media_id = account_poster.upload_media(image_bytes)
                 elif hasattr(account_poster, 'api_v1') and account_poster.api_v1:
                     media = account_poster.api_v1.media_upload(
-                        filename="bitunix_campaign.jpeg", 
+                        filename=fname,
                         file=io.BytesIO(image_bytes)
                     )
                     media_id = str(media.media_id)
-                
+
                 if media_id:
-                    logger.info(f"Campaign image uploaded: {media_id}")
+                    logger.info(f"Campaign image uploaded: {media_id} ({fname}, {len(image_bytes)} bytes)")
                 else:
-                    logger.warning("Campaign image upload failed, posting without image")
+                    logger.warning(
+                        f"Campaign image upload returned no media_id "
+                        f"({fname}, {len(image_bytes)} bytes) — posting text only"
+                    )
             except Exception as e:
                 logger.error(f"Error uploading campaign image: {e}")
         else:
-            logger.warning(f"Campaign image not found: {BITUNIX_CAMPAIGN_IMAGE}")
-        
+            logger.warning(f"Campaign image not found: {campaign_image}")
+
         # Append today's actual top-gainer cashtags — fetch fresh if cache is cold
         _bt_tickers = await _get_ticker_suffix()
-        if _bt_tickers and len(tweet_text + _bt_tickers) <= 280:
+        if _bt_tickers and _twitter_text_len(tweet_text + _bt_tickers) <= 280:
             tweet_text = tweet_text + _bt_tickers
 
         media_ids = [media_id] if media_id else None
