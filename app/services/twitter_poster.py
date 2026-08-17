@@ -450,8 +450,40 @@ def _pick_tweet_length() -> str:
 
 
 def _pick_personality() -> Dict:
-    """Pick a random writing personality for tweet generation"""
+    """Pick a random writing personality for tweet generation.
+
+    Weighted toward sharp influencer / alpha voices — still rotates so the feed
+    doesn't sound like one bot looping the same cadence.
+    """
     personalities = [
+        {
+            'name': 'crypto_influencer',
+            'voice': (
+                'Top crypto influencer energy: sharp, confident, scroll-stopping. '
+                'Sounds like someone with a real following who actually trades. '
+                'Short hooks, one clear take, zero corporate speak. Occasionally drops '
+                'a soft soft-CTA vibe without sounding like an ad. Lowercase ok. No emojis.'
+            ),
+            'examples': [
+                "everyone sleeping on ${symbol} until it's already up {change:.1f}%. classic. {price_str} — still early if volume holds",
+                "hot take: ${symbol} is the cleanest chart on my screen right now. not financial advice, just pattern recognition",
+                "if you're only watching BTC you missed ${symbol} doing {change:.1f}% while you debated dominance. rotate or stay poor",
+            ],
+            'weight': 3,
+        },
+        {
+            'name': 'alpha_poster',
+            'voice': (
+                'Elite timeline poster. Writes like they expect screenshots. Specific, '
+                'opinionated, slightly cocky but earned. Never spammy. One idea per tweet.'
+            ),
+            'examples': [
+                "${symbol} at {price_str} is the kind of move that separates people who watch from people who size. {change:.1f}% and counting",
+                "bookmark this: ${symbol} structure flipped before the crowd noticed. {price_str}. you're welcome or you're late",
+                "timeline still arguing about BTC while ${symbol} prints {change:.1f}%. allocation > opinions",
+            ],
+            'weight': 3,
+        },
         {
             'name': 'chill_trader',
             'voice': 'Relaxed, unbothered. Uses lowercase energy, casual punctuation. Talks like texting a friend about markets. Sometimes drops words. Never excited.',
@@ -460,6 +492,7 @@ def _pick_personality() -> Dict:
                 "${symbol} vibing at {price_str}. no drama no fomo just steady green",
                 "${symbol}. chill",
             ],
+            'weight': 1,
         },
         {
             'name': 'dry_wit',
@@ -589,6 +622,7 @@ def _pick_personality() -> Dict:
                 "the liquidity on ${symbol} improved significantly this week. before, the spread was wide enough to park a car in. now it's tight. that's a setup forming",
                 "narratives move money. ${symbol} is sitting right at the intersection of two that are heating up. {change:.1f}%. watching the volume closely",
             ],
+            'weight': 2,
         },
         {
             'name': 'honest_loser',
@@ -618,7 +652,8 @@ def _pick_personality() -> Dict:
             ],
         },
     ]
-    return random.choice(personalities)
+    weights = [max(1, int(p.get('weight', 1))) for p in personalities]
+    return random.choices(personalities, weights=weights, k=1)[0]
 
 
 def _strip_extra_cashtags(text: str, max_cashtags: int = 1) -> str:
@@ -642,8 +677,8 @@ def _strip_extra_cashtags(text: str, max_cashtags: int = 1) -> str:
 async def _ai_review_tweet(tweet_text: str, post_type: str, context: dict = None) -> str:
     """
     AI pre-post review: reads the tweet and either approves it or rewrites it.
-    Uses Claude Haiku for speed. Times out after 6s and returns original on failure.
-    Never blocks a post — always falls back to original on any error.
+    Uses Claude Sonnet for sharper influencer voice. Times out after 12s and
+    returns original on failure. Never blocks a post.
     """
     from app.services.anthropic_policy import crypto_anthropic_enabled, log_crypto_anthropic_blocked
 
@@ -675,15 +710,15 @@ async def _ai_review_tweet(tweet_text: str, post_type: str, context: dict = None
         async def _call():
             return await asyncio.to_thread(
                 client.messages.create,
-                model="claude-haiku-4-5",
-                max_tokens=300,
+                model="claude-sonnet-4-5",
+                max_tokens=400,
                 messages=[{"role": "user", "content": prompt}],
             )
 
-        response = await asyncio.wait_for(_call(), timeout=6.0)
+        response = await asyncio.wait_for(_call(), timeout=12.0)
         result = (response.content[0].text or "").strip()
 
-        if not result or result == "APPROVED":
+        if not result or result.upper() == "APPROVED":
             return tweet_text
         if len(result) > 350 or len(result) < 10:
             return tweet_text
@@ -779,9 +814,10 @@ def _maybe_yubit_drop() -> str:
 
 
 async def _call_grok_tweet(prompt: str, max_chars: int, label: str = "",
-                           system: str = "") -> Optional[str]:
+                           system: str = "", model: str = "claude-sonnet-4-5") -> Optional[str]:
     """
-    Generate tweets using Claude. Primary AI for all Twitter content.
+    Generate tweets using Claude Sonnet. Primary AI for all Twitter content.
+    Influencer-grade copy — Sonnet by default; callers can pass haiku only as last resort.
     """
     from app.services.anthropic_policy import crypto_anthropic_enabled, log_crypto_anthropic_blocked
 
@@ -797,11 +833,11 @@ async def _call_grok_tweet(prompt: str, max_chars: int, label: str = "",
             return None
         client = _anthropic.Anthropic(base_url=_base_url, api_key=_api_key) if _base_url else _anthropic.Anthropic(api_key=_api_key)
         # Allow enough tokens to generate a full tweet — we'll trim cleanly if needed
-        max_tokens = max(80, min(400, max_chars * 2))
+        max_tokens = max(120, min(500, max_chars * 2))
         full_prompt = f"{system}\n\n{prompt}".strip() if system else prompt
         response = await asyncio.to_thread(
             client.messages.create,
-            model="claude-haiku-4-5",
+            model=model,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": full_prompt}],
         )
@@ -922,11 +958,12 @@ async def generate_ai_tweet(coin_data: Dict, post_type: str = "featured") -> Opt
         _gainers_ctx = get_daily_gainers_str(max_tickers=5, exclude=symbol)
 
         system_msg = (
-            "You are a crypto trader who has been in markets since 2019 and posts on X. "
-            "You're not a brand, not a bot, not a marketer. You type fast and post when something catches your attention. "
-            "Your voice is real — sometimes uncertain, sometimes direct, occasionally dark. "
-            "No emojis. No hashtags. No exclamation marks. No NFA or DYOR. Lowercase when it feels right. "
-            "Write like you're texting, not presenting. "
+            "You are a high-engagement crypto influencer on X with a real trading following. "
+            "You post like Cobie / Hsaka energy mixed with a sharp retail trader — opinionated, "
+            "specific, scroll-stopping. Not a brand. Not a bot. Not a marketer. "
+            "Voice rules: confident but human, occasional lowercase, no emojis, no hashtags, "
+            "no NFA/DYOR spam, no exclamation storms. One clear take. "
+            "Write like people will screenshot it. "
             f"IMPORTANT: The ONLY coin you may reference with a $ cashtag is ${symbol}. "
             "Do not write any other coin name as a cashtag (no $BTC, $ETH, $SOL etc). "
             "You may mention other coin names in plain text without a $ prefix if truly natural, but the main cashtag must be the coin above."
@@ -947,9 +984,42 @@ Situation: {situation}
 Length: {length_instruction}
 Numbers: {data_note}
 
-Write just the tweet. No quotes, no labels, no explanation."""
+Write just the tweet. No quotes, no labels, no explanation.
+Make it feel like a real influencer timeline post — sharp hook, real take, zero filler."""
 
-        # Primary: Gemini 2.0 Flash — most natural casual voice
+        # Primary: Claude Sonnet — sharper influencer voice
+        try:
+            import anthropic as _anthropic
+            _sonnet_key = os.getenv('AI_INTEGRATIONS_ANTHROPIC_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
+            _base_url = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_BASE_URL")
+            if _sonnet_key:
+                _sclient = _anthropic.Anthropic(base_url=_base_url, api_key=_sonnet_key) if _base_url else _anthropic.Anthropic(api_key=_sonnet_key)
+                mtok = max(120, min(500, max_chars * 2))
+                _sresp = await asyncio.to_thread(
+                    lambda: _sclient.messages.create(
+                        model="claude-sonnet-4-5",
+                        max_tokens=mtok,
+                        system=system_msg,
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                )
+                _tweet = (_sresp.content[0].text or "").strip().strip('"').strip("'").strip('```').strip().replace('**', '').replace('*', '')
+                if _tweet and len(_tweet) > 5:
+                    if len(_tweet) > max_chars:
+                        for sep in ('. ', '.\n', '? ', '\n\n', '\n'):
+                            idx = _tweet[:max_chars].rfind(sep)
+                            if idx > max_chars * 0.5:
+                                _tweet = _tweet[:idx + 1].rstrip()
+                                break
+                        else:
+                            _tweet = _tweet[:max_chars].rsplit(' ', 1)[0].rstrip()
+                    _tweet = _sanitize_tickers(_tweet, symbol)
+                    logger.info(f"🐦 Sonnet tweet [{personality['name']}/{tweet_length}] ${symbol}: {_tweet[:70]}...")
+                    return _tweet
+        except Exception as _e:
+            logger.warning(f"Claude Sonnet tweet failed: {_e}")
+
+        # Fallback 1: Gemini 2.0 Flash
         try:
             from google import genai as _genai
             _gemini_key = os.getenv('AI_INTEGRATIONS_GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
@@ -980,43 +1050,12 @@ Write just the tweet. No quotes, no labels, no explanation."""
         except Exception as _e:
             logger.warning(f"Gemini tweet failed: {_e}")
 
-        # Fallback 1: Claude Sonnet — higher quality than Haiku
-        try:
-            import anthropic as _anthropic
-            _sonnet_key = os.getenv('AI_INTEGRATIONS_ANTHROPIC_API_KEY') or os.getenv('ANTHROPIC_API_KEY')
-            _base_url = os.environ.get("AI_INTEGRATIONS_ANTHROPIC_BASE_URL")
-            if _sonnet_key:
-                _sclient = _anthropic.Anthropic(base_url=_base_url, api_key=_sonnet_key) if _base_url else _anthropic.Anthropic(api_key=_sonnet_key)
-                mtok = max(80, min(400, max_chars * 2))
-                _sresp = await asyncio.to_thread(
-                    lambda: _sclient.messages.create(
-                        model="claude-sonnet-4-5",
-                        max_tokens=mtok,
-                        system=system_msg,
-                        messages=[{"role": "user", "content": prompt}],
-                    )
-                )
-                _tweet = (_sresp.content[0].text or "").strip().strip('"').strip("'").strip('```').strip().replace('**', '').replace('*', '')
-                if _tweet and len(_tweet) > 5:
-                    if len(_tweet) > max_chars:
-                        for sep in ('. ', '.\n', '? ', '\n\n', '\n'):
-                            idx = _tweet[:max_chars].rfind(sep)
-                            if idx > max_chars * 0.5:
-                                _tweet = _tweet[:idx + 1].rstrip()
-                                break
-                        else:
-                            _tweet = _tweet[:max_chars].rsplit(' ', 1)[0].rstrip()
-                    _tweet = _sanitize_tickers(_tweet, symbol)
-                    logger.info(f"🐦 Sonnet tweet [{personality['name']}/{tweet_length}] ${symbol}: {_tweet[:70]}...")
-                    return _tweet
-        except Exception as _e:
-            logger.warning(f"Claude Sonnet tweet failed: {_e}")
-
-        # Fallback 2: Claude Haiku (fast, cheap last resort)
+        # Fallback 2: Claude Haiku (last resort)
         grok_tweet = await _call_grok_tweet(
             prompt, max_chars,
             label=f"haiku/{personality['name']}/{tweet_length}",
             system=system_msg,
+            model="claude-haiku-4-5",
         )
         if grok_tweet:
             return _sanitize_tickers(grok_tweet, symbol)
@@ -6255,17 +6294,12 @@ _DEFAULT_CAMPAIGN_IMAGE = os.path.join(_ATTACHED_ASSETS_DIR, "bitunix_campaign_a
 
 
 def resolve_bitunix_campaign_image() -> str:
-    """Pick the campaign poster to attach.
+    """Campaign poster shipped in the repo — no env vars required.
 
     Priority:
-    1) BITUNIX_CAMPAIGN_IMAGE env (if path exists)
-    2) Newest attached_assets/bitunix_campaign*.{png,jpg,jpeg,webp}
-    3) Default bitunix_campaign_aug2026.png
+    1) Newest attached_assets/bitunix_campaign*.{png,jpg,jpeg,webp}
+    2) Default bitunix_campaign_aug2026.png
     """
-    env_path = (os.environ.get("BITUNIX_CAMPAIGN_IMAGE") or "").strip()
-    if env_path and os.path.exists(env_path):
-        return env_path
-
     try:
         import glob
         matches = []
@@ -6290,10 +6324,10 @@ def resolve_bitunix_campaign_image() -> str:
 
 BITUNIX_CAMPAIGN_IMAGE = resolve_bitunix_campaign_image()
 # Aug 17–31 2026 Bitunix x TradeHub Markets — up to 20,000 USDT rewards
-BITUNIX_CAMPAIGN_LINK = os.environ.get(
-    "BITUNIX_CAMPAIGN_URL",
-    "https://www.bitunix.com/activity/basic/ENWeeklyCampaign0817?vipCode=fgq74890",
-).strip() or "https://www.bitunix.com/activity/basic/ENWeeklyCampaign0817?vipCode=fgq74890"
+# Hardcoded on purpose — do not gate on BITUNIX_CAMPAIGN_URL / env overrides.
+BITUNIX_CAMPAIGN_LINK = (
+    "https://www.bitunix.com/activity/basic/ENWeeklyCampaign0817?vipCode=fgq74890"
+)
 # Event listed as UTC+8: Aug 17 00:00 → Aug 31 23:59
 BITUNIX_CAMPAIGN_START = datetime(2026, 8, 16, 16, 0, 0)
 BITUNIX_CAMPAIGN_END = datetime(2026, 8, 31, 15, 59, 59)
@@ -6304,11 +6338,8 @@ def bitunix_campaign_is_active(now: Optional[datetime] = None) -> bool:
     return BITUNIX_CAMPAIGN_START <= now <= BITUNIX_CAMPAIGN_END
 
 
-# Evergreen affiliate signup — after campaign ends, fall back here.
-BITUNIX_SIGNUP_LINK = os.environ.get(
-    "BITUNIX_REFERRAL_URL",
-    "https://www.bitunix.com/register?vipCode=fgq74890",
-).strip() or "https://www.bitunix.com/register?vipCode=fgq74890"
+# Evergreen affiliate signup — after campaign ends, fall back here (also hardcoded).
+BITUNIX_SIGNUP_LINK = "https://www.bitunix.com/register?vipCode=fgq74890"
 
 
 def active_bitunix_promo_link() -> str:
@@ -7504,6 +7535,58 @@ async def post_bitunix_signup(account_poster) -> Optional[Dict]:
         return {'success': False, 'error': str(e)}
 
 
+async def generate_bitunix_campaign_tweet(live_tickers: Dict, link: str) -> Optional[str]:
+    """Sonnet-first influencer copy for the Bitunix x TradeHub Aug campaign."""
+    angle = random.choice([
+        "deposit ladder scarcity (slots running out)",
+        "volume rewards stacking on top of deposit bonuses",
+        "trading competition / prize pool FOMO",
+        "mover hook — today's runners + campaign stack",
+        "direct CTA — up to 20,000 USDT, Aug 17–31 only",
+        "soft flex — trading movers on Bitunix while rewards stack",
+        "first-come first-served deposit tiers",
+    ])
+    t1 = live_tickers.get("ticker1", "$BTC")
+    t2 = live_tickers.get("ticker2", "$ETH")
+    t3 = live_tickers.get("ticker3", "$SOL")
+    p1 = live_tickers.get("pct1", "0")
+    p2 = live_tickers.get("pct2", "0")
+
+    system = (
+        "You are a top crypto influencer on X promoting a real limited campaign. "
+        "Write like Cobie/Hsaka-tier timeline energy: confident, specific, human. "
+        "Not a corporate ad. Not spammy. No emojis. No hashtags. No NFA/DYOR. "
+        "Lowercase ok. Keep the exact campaign link untouched at the end. "
+        "Twitter length: under 260 chars counting URLs as 23 chars."
+    )
+    prompt = f"""Write ONE tweet pushing Bitunix x TradeHub Markets (Aug 17–31).
+
+Facts you can use (don't invent other numbers):
+- up to 20,000 USDT total rewards
+- deposit bonuses: $100→20 USDT (30 slots), $500→60 (20), $1000→180 (20), $2000→380 (10)
+- volume ladder rewards stack on top
+- trading competition (volume / pnl / roi)
+- ends Aug 31, first come first served
+- today's movers: {t1} {p1}% · {t2} {p2}% · also {t3}
+
+Angle for this post: {angle}
+
+Hard rules:
+- Include this exact link on its own last line: {link}
+- Mention Bitunix naturally
+- Sound like a real influencer, not a brand account
+- No em dashes
+- No TradeHub strategy bot CTAs
+- Output ONLY the tweet text
+"""
+    tweet = await _call_grok_tweet(prompt, max_chars=260, label="bitunix_campaign_ai", system=system)
+    if not tweet:
+        return None
+    if link not in tweet:
+        tweet = tweet.rstrip() + f"\n\n{link}"
+    return tweet
+
+
 async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
     """Post a Bitunix campaign tweet with the campaign image, live tickers, and FOMO"""
     global _campaign_post_index
@@ -7520,11 +7603,18 @@ async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
         hashtags = await get_trending_hashtags()
         live_tickers = await get_live_tickers_for_campaign()
         
-        tweet_text = template['text'].format(
-            link=BITUNIX_CAMPAIGN_LINK,
-            hashtags=hashtags,
-            **live_tickers
-        )
+        # Prefer influencer AI copy; template is fallback only
+        ai_tweet = await generate_bitunix_campaign_tweet(live_tickers, BITUNIX_CAMPAIGN_LINK)
+        if ai_tweet:
+            tweet_text = ai_tweet
+            source = f"ai/{template['id']}"
+        else:
+            tweet_text = template['text'].format(
+                link=BITUNIX_CAMPAIGN_LINK,
+                hashtags=hashtags,
+                **live_tickers
+            )
+            source = f"template/{template['id']}"
         
         # Twitter shortens all URLs to 23 chars — use that count when checking length
         import re as _re
@@ -7577,6 +7667,9 @@ async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
             _idx = tweet_text.lower().find(_marker.lower())
             if _idx != -1:
                 tweet_text = tweet_text[:_idx].rstrip()
+
+        if BITUNIX_CAMPAIGN_LINK not in tweet_text:
+            tweet_text = tweet_text.rstrip() + f"\n\n{BITUNIX_CAMPAIGN_LINK}"
         
         media_id = None
         campaign_image = resolve_bitunix_campaign_image()
@@ -7616,11 +7709,25 @@ async def post_bitunix_campaign(account_poster) -> Optional[Dict]:
         if _bt_tickers and _twitter_text_len(tweet_text + _bt_tickers) <= 280:
             tweet_text = tweet_text + _bt_tickers
 
+        tweet_text = await _ai_review_tweet(tweet_text, 'bitunix_campaign', {
+            'template': template['id'],
+            'source': source,
+            'exchange': 'Bitunix',
+            'campaign': 'Bitunix x TradeHub Markets Aug 17-31, up to 20,000 USDT',
+            'link': BITUNIX_CAMPAIGN_LINK,
+            'style_note': (
+                'Influencer voice. Keep the exact Bitunix campaign link. '
+                'No em dashes. No strategy-bot CTAs. Scarcity + rewards OK.'
+            ),
+        })
+        if BITUNIX_CAMPAIGN_LINK not in tweet_text:
+            tweet_text = tweet_text.rstrip() + f"\n\n{BITUNIX_CAMPAIGN_LINK}"
+
         media_ids = [media_id] if media_id else None
         result = account_poster.post_tweet(tweet_text, media_ids=media_ids)
         
         if result and result.get('success'):
-            logger.info(f"Campaign tweet posted (template: {template['id']})")
+            logger.info(f"Campaign tweet posted ({source})")
         
         return result
         
