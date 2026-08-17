@@ -16,7 +16,7 @@ import { colors, font, radius, spacing } from '@/constants/colors';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiGet, apiPost, Portfolio, ApiError } from '@/lib/api';
 
-const REFERRAL_URL = 'https://www.bitunix.com/register?vipCode=tradehubsave';
+const REFERRAL_URL = 'https://www.bitunix.com/activity/basic/ENWeeklyCampaign0817?vipCode=fgq74890';
 const FP_REFERRAL_URL = 'https://www.fpmarkets.com/?fpm-affiliate-utm-source=IB&fpm-affiliate-model=revenue-sharing';
 
 type PortalSettings = {

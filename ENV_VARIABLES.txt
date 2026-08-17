@@ -18,7 +18,8 @@ TWITTER_CONSUMER_SECRET=
 TWITTER_ACCESS_TOKEN=
 TWITTER_ACCESS_TOKEN_SECRET=
 TWITTER_BEARER_TOKEN=
-BITUNIX_REFERRAL_URL=https://www.bitunix.com/register?vipCode=tradehubsave
+BITUNIX_REFERRAL_URL=https://www.bitunix.com/activity/basic/ENWeeklyCampaign0817?vipCode=fgq74890
+BITUNIX_CAMPAIGN_URL=https://www.bitunix.com/activity/basic/ENWeeklyCampaign0817?vipCode=fgq74890
 TWITTER_AUTO_REPLY_ENABLED=1
 # TWITTER_BEARER_TOKEN required for mover auto-replies (search API)
 

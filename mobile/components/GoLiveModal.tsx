@@ -16,7 +16,7 @@ interface Props {
   defaultBroker?: GoLiveBroker;
 }
 
-const BITUNIX_REFERRAL = 'https://www.bitunix.com/register?vipCode=tradehubsave';
+const BITUNIX_REFERRAL = 'https://www.bitunix.com/activity/basic/ENWeeklyCampaign0817?vipCode=fgq74890';
 const FP_REFERRAL = 'https://portal.fpmarkets.com/register?fpm-affiliate-utm-source=IB&fpm-affiliate-agt=66940&_gl=1*ch7bdc*_gcl_au*MjA1NjIwMDU2NS4xNzc3MzA4MTUxLjk3OTE1MDYzMC4xNzk4MTU0ODkuMTc3OTgxNTYyNA..*_ga*MTI5NzM3NjM0MC4xNzU2Mjg2NDc0*_ga_GRFVC7S1MC*czE3Nzk4MTU0ODUkbzUkZzEkdDE3Nzk4MTY3MjUkajQ3JGwwJGg0MTI0MzI3MzI.';
 
 type Step = { icon: string; title: string; body: string; cta?: { label: string; action: () => void } };
