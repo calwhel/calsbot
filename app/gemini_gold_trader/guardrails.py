@@ -79,6 +79,14 @@ def merge_config(db_row: GeminiGoldConfig, env: GeminiGoldRuntimeConfig) -> Gemi
         live_lot_size=float(getattr(db_row, "live_lot_size", None) or env.live_lot_size or 0.01),
         live_mirror_enabled=bool(getattr(db_row, "live_mirror_enabled", False)),
         max_live_trades_day=int(getattr(db_row, "max_live_trades_day", None) or env.max_live_trades_day or 3),
+        max_open_positions=max(
+            0,
+            int(
+                getattr(db_row, "max_open_positions", None)
+                if getattr(db_row, "max_open_positions", None) is not None
+                else env.max_open_positions
+            ),
+        ),
         confidence_threshold=int(db_row.confidence_threshold or env.confidence_threshold),
         use_limit_entry=(
             env.use_limit_entry
@@ -650,9 +658,12 @@ def check_can_execute(
         return False, "no_demo_user"
     if trades_today_effective(db) >= cfg.max_trades_day:
         return False, "max_trades_day"
-    if effective_open_slots_used(
+    # max_open_positions <= 0 disables the concurrent-open-position cap entirely
+    # (the daily max_trades_day cap still bounds total activity).
+    max_open = max(0, int(getattr(cfg, "max_open_positions", 0) or 0))
+    if max_open > 0 and effective_open_slots_used(
         db, user_id, cfg, exclude_decision_id=exclude_decision_id
-    ) >= 1:
+    ) >= max_open:
         return False, describe_open_cap_block(
             db, user_id, cfg, exclude_decision_id=exclude_decision_id
         )

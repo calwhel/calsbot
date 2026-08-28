@@ -62,7 +62,13 @@ def db_session():
     session.close()
 
 
-def _cfg(*, dry_run: bool = False, max_trades_day: int = 4, min_gap: int = 20):
+def _cfg(
+    *,
+    dry_run: bool = False,
+    max_trades_day: int = 4,
+    min_gap: int = 20,
+    max_open: int = 1,
+):
     row = GeminiGoldConfig(id=1, max_calls_day=340, enabled=True, kill_switch=False, dry_run=dry_run)
     env = env_defaults()
     env.dry_run = dry_run
@@ -70,6 +76,9 @@ def _cfg(*, dry_run: bool = False, max_trades_day: int = 4, min_gap: int = 20):
     env.demo_user_id = 42
     env.max_trades_day = max_trades_day
     env.min_trade_gap_min = min_gap
+    # Historical tests exercise a 1-position concurrent cap; the runtime default
+    # is now 0 (off), so set it explicitly here.
+    env.max_open_positions = max_open
     return merge_config(row, env)
 
 
@@ -465,3 +474,22 @@ def test_check_can_execute_blocks_when_broker_position_open(_mock_open, db_sessi
     assert ok is False
     assert reason.startswith("blocked: max_open_position")
     _mock_open.assert_called()
+
+
+@patch("app.gemini_gold_trader.guardrails.open_position_count", return_value=3)
+def test_max_open_positions_off_allows_concurrent(_mock_open, db_session):
+    """max_open_positions=0 disables the concurrent-open-position cap even when
+    multiple positions are already open."""
+    cfg = _cfg(max_open=0)
+    ok, reason = check_can_execute(db_session, cfg, 42)
+    assert ok is True
+    assert reason == "ok"
+
+
+@patch("app.gemini_gold_trader.guardrails.open_position_count", return_value=2)
+def test_max_open_positions_cap_of_three_allows_third(_mock_open, db_session):
+    """A configurable cap > 1 permits up to that many concurrent positions."""
+    cfg = _cfg(max_open=3)
+    ok, reason = check_can_execute(db_session, cfg, 42)
+    assert ok is True
+    assert reason == "ok"

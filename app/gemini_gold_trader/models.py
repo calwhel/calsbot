@@ -27,6 +27,7 @@ class GeminiGoldConfig(Base):
     live_confirmed_at = Column(DateTime, nullable=True)
     live_mirror_enabled = Column(Boolean, default=False, nullable=False)
     max_live_trades_day = Column(Integer, default=3, nullable=False)
+    max_open_positions = Column(Integer, default=0, nullable=False)
     live_mirror_confirmed_at = Column(DateTime, nullable=True)
     use_limit_entry = Column(Boolean, default=False, nullable=False)
     pending_entry_timeout_min = Column(Integer, default=30, nullable=False)
